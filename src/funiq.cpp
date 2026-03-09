@@ -1,9 +1,11 @@
 #include <algorithm>
 #include <functional>
 #include <cctype>
+#include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <map>
 #include <string>
@@ -187,22 +189,64 @@ int main(int argc, char* argv[]) {
 		// progress indicator visible even when stdout is piped or
 		// redirected (e.g. funiq file.txt | tee out.txt).
 		bool showProgress = isatty(STDERR_FD);
-		const char spinner[] = "|/-\\";
 		unsigned long lineCount = 0;
+		unsigned long totalLines = 0;
+
+		// For file input, count total lines first so we can show a
+		// percentage progress bar. Seek back to the start afterwards.
+		if(showProgress && !filename.empty()) {
+			std::string tmp;
+			while(getline(inputStream, tmp)) totalLines++;
+			fileStream.clear();
+			fileStream.seekg(0);
+		}
+
+		auto startTime = std::chrono::steady_clock::now();
 
 		for (std::string line; getline(inputStream, line); ) {
 			matcher.add(line);
 			lineCount++;
-			if(showProgress && (lineCount % 100 == 0)) {
-				std::cerr << "\r  " << spinner[lineCount / 100 % 4]
-				          << " Processing... " << lineCount << " lines"
-				          << std::flush;
+			if(showProgress && (lineCount % 50 == 0)) {
+				auto now = std::chrono::steady_clock::now();
+				double elapsed = std::chrono::duration<double>(now - startTime).count();
+				double rate = (elapsed > 0) ? lineCount / elapsed : 0;
+
+				std::cerr << "\rProcessing: ";
+				if(totalLines > 0) {
+					// File mode: show percentage bar
+					int pct = (int)(lineCount * 100 / totalLines);
+					int barWidth = 30;
+					int filled = pct * barWidth / 100;
+					std::cerr << pct << "%|";
+					for(int b = 0; b < barWidth; b++)
+						std::cerr << (b < filled ? "\xe2\x96\x88" : " ");
+					std::cerr << "| " << lineCount << "/" << totalLines;
+				} else {
+					// Stdin mode: show line count only
+					std::cerr << lineCount << " lines";
+				}
+				std::cerr << " [" << std::fixed << std::setprecision(1)
+				          << rate << " lines/s]  " << std::flush;
 			}
 		}
 
 		// Clear the progress line before outputting results
-		if(showProgress && lineCount >= 100) {
-			std::cerr << "\r" << std::string(40, ' ') << "\r" << std::flush;
+		if(showProgress && lineCount >= 50) {
+			auto now = std::chrono::steady_clock::now();
+			double elapsed = std::chrono::duration<double>(now - startTime).count();
+			double rate = (elapsed > 0) ? lineCount / elapsed : 0;
+
+			// Show completed state briefly
+			std::cerr << "\rProcessing: ";
+			if(totalLines > 0) {
+				std::cerr << "100%|";
+				for(int b = 0; b < 30; b++) std::cerr << "\xe2\x96\x88";
+				std::cerr << "| " << lineCount << "/" << totalLines;
+			} else {
+				std::cerr << lineCount << " lines";
+			}
+			std::cerr << " [" << std::fixed << std::setprecision(1)
+			          << rate << " lines/s]  \n" << std::flush;
 		}
 
 		matcher.show(&std::cout);
