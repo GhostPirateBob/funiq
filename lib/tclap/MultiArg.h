@@ -225,7 +225,8 @@ private:
 	/**
 	 * Prevent accidental copying
 	 */
-	MultiArg<T>(const MultiArg<T>& rhs);
+	// Template-id removed from constructor to fix C++20 warning
+	MultiArg(const MultiArg<T>& rhs);
 	MultiArg<T>& operator=(const MultiArg<T>& rhs);
 
 };

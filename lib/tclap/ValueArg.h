@@ -240,7 +240,8 @@ private:
        /**
         * Prevent accidental copying
         */
-       ValueArg<T>(const ValueArg<T>& rhs);
+       // Template-id removed from constructor to fix C++20 warning
+       ValueArg(const ValueArg<T>& rhs);
        ValueArg<T>& operator=(const ValueArg<T>& rhs);
 };
 
