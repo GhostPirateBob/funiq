@@ -8,6 +8,15 @@
 #include <map>
 #include <string>
 
+#ifdef _WIN32
+#include <io.h>
+#define isatty _isatty
+#define STDERR_FD 2
+#else
+#include <unistd.h>
+#define STDERR_FD STDERR_FILENO
+#endif
+
 #include "tclap/CmdLine.h"
 #include "funiq/Settings.h"
 #include "funiq/Matcher.h"
@@ -33,6 +42,7 @@ public:
 			<< "  -I         Ignore non-alphanumeric characters\n"
 			<< "  -c         Show duplicate counts (like uniq -c)\n"
 			<< "  -a         Show all duplicates, not just the representative\n"
+			<< "  --default  Shorthand for -iI -m normalized-levenshtein -d 0.125\n"
 			<< "  -h         Show this help\n"
 			<< "  --version  Show version\n"
 			<< "\n"
@@ -90,6 +100,9 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 	TCLAP::SwitchArg ignoreNonAlphaNumericSwitch(
 		"I","ignore-non-alpha-numeric",
 		"Ignore non-alphanumeric characters");
+	TCLAP::SwitchArg defaultSwitch(
+		"","default",
+		"Shorthand for -iI -m normalized-levenshtein -d 0.125");
 
 	std::vector<std::string> allowedComparisonMethods;
 	allowedComparisonMethods.push_back("levenshtein");
@@ -108,17 +121,31 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 	cmd.add(showAllSwitch);
 	cmd.add(showTotalsSwitch);
 	cmd.add(ignoreNonAlphaNumericSwitch);
+	cmd.add(defaultSwitch);
 	cmd.parse(argc, argv);
 
-	settings.maxDistance = distanceArg.getValue();
-	settings.caseInsensitive = caseSwitch.getValue();
-	settings.showAllMatches	= showAllSwitch.getValue();
-	settings.showTotals = showTotalsSwitch.getValue();
-	settings.ignoreNonAlphaNumeric = ignoreNonAlphaNumericSwitch.getValue();
+	// --default sets sensible defaults for general-purpose fuzzy matching
+	if(defaultSwitch.getValue()) {
+		settings.caseInsensitive = true;
+		settings.ignoreNonAlphaNumeric = true;
+		settings.comparisonMethod = NormalizedLevenshtein;
+		settings.maxDistance = 0.125;
+	} else {
+		settings.comparisonMethod = Levenshtein;
+	}
 
-	std::string comparisonMethod = comparisonMethodArg.getValue();
-	if(comparisonMethod == "levenshtein") settings.comparisonMethod = Levenshtein;
-	if(comparisonMethod == "normalized-levenshtein") settings.comparisonMethod = NormalizedLevenshtein;
+	// Explicit flags override --default
+	if(caseSwitch.isSet()) settings.caseInsensitive = caseSwitch.getValue();
+	if(ignoreNonAlphaNumericSwitch.isSet()) settings.ignoreNonAlphaNumeric = ignoreNonAlphaNumericSwitch.getValue();
+	if(distanceArg.isSet()) settings.maxDistance = distanceArg.getValue();
+	if(comparisonMethodArg.isSet()) {
+		std::string comparisonMethod = comparisonMethodArg.getValue();
+		if(comparisonMethod == "levenshtein") settings.comparisonMethod = Levenshtein;
+		if(comparisonMethod == "normalized-levenshtein") settings.comparisonMethod = NormalizedLevenshtein;
+	}
+
+	settings.showAllMatches = showAllSwitch.getValue();
+	settings.showTotals = showTotalsSwitch.getValue();
 
 	filename = filenameArg.getValue();
 }
@@ -155,8 +182,27 @@ int main(int argc, char* argv[]) {
 			fileStream = getFileInput(filename);
 		}
 		std::istream& inputStream = filename.empty() ? std::cin : fileStream;
+
+		// Show progress on stderr when it's a terminal. This keeps the
+		// progress indicator visible even when stdout is piped or
+		// redirected (e.g. funiq file.txt | tee out.txt).
+		bool showProgress = isatty(STDERR_FD);
+		const char spinner[] = "|/-\\";
+		unsigned long lineCount = 0;
+
 		for (std::string line; getline(inputStream, line); ) {
 			matcher.add(line);
+			lineCount++;
+			if(showProgress && (lineCount % 100 == 0)) {
+				std::cerr << "\r  " << spinner[lineCount / 100 % 4]
+				          << " Processing... " << lineCount << " lines"
+				          << std::flush;
+			}
+		}
+
+		// Clear the progress line before outputting results
+		if(showProgress && lineCount >= 100) {
+			std::cerr << "\r" << std::string(40, ' ') << "\r" << std::flush;
 		}
 
 		matcher.show(&std::cout);
