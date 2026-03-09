@@ -1,15 +1,66 @@
 name: C/C++ CI
 
-on: [push]
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
 
 jobs:
   build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: funiq-linux-amd64
+          - os: windows-latest
+            artifact: funiq-windows-amd64
 
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v1
-      - name: test
-        run: make test
-      - name: build
+      - uses: actions/checkout@v4
+
+      # Linux build
+      - name: build (Linux)
+        if: runner.os == 'Linux'
         run: make build
+
+      - name: test (Linux)
+        if: runner.os == 'Linux'
+        run: make test
+
+      - name: install (Linux)
+        if: runner.os == 'Linux'
+        run: sudo make install
+
+      - name: verify install (Linux)
+        if: runner.os == 'Linux'
+        run: funiq --version
+
+      - name: upload artifact (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: bin/funiq
+
+      # Windows build
+      - name: build (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          mkdir bin
+          g++ -Wall -g -std=c++11 -O2 -Ilib src/funiq.cpp -o bin/funiq.exe
+
+      - name: test (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          g++ -Wall -g -std=c++11 -Ilib test/test.cpp -o bin/funiq_test.exe
+          bin/funiq_test.exe
+
+      - name: upload artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: bin/funiq.exe
