@@ -145,24 +145,37 @@ make
 
 in the project directory. This will build the `funiq` binary to `bin/funiq` and then run the test suite. A test failure will not prevent the binary from being built.
 
-## Installing to system PATH
+## Installing to PATH
 
-To install the compiled binary to your system (defaults to `/usr/local/bin`):
+To install the compiled binary:
+
+```
+make install
+```
+
+This will automatically install to the first available location:
+
+1. `~/.local/bin` — if it exists (no sudo needed)
+2. `/usr/local/bin` — standard system-wide location (may need sudo)
+3. `/usr/bin` — last resort (may need sudo)
+
+If the install fails due to permissions, you'll be prompted to retry with `sudo`:
 
 ```
 sudo make install
 ```
 
-You can customise the install location with `PREFIX`:
+You can also override the install location with `PREFIX`:
 
 ```
+make install PREFIX=$HOME/.local
 sudo make install PREFIX=/usr
 ```
 
 To remove it:
 
 ```
-sudo make uninstall
+make uninstall
 ```
 
 ## Pre-built binaries
@@ -176,6 +189,6 @@ Pre-built Linux and Windows binaries are available from the [Actions](../../acti
 | `make`             | Build the binary and run tests                           |
 | `make build`       | Build the binary only                                    |
 | `make test`        | Compile and run the test suite                           |
-| `make install`     | Install the binary to `$(PREFIX)/bin` (default `/usr/local/bin`) |
+| `make install`     | Install the binary (auto-detects `~/.local/bin`, `/usr/local/bin`, or `/usr/bin`) |
 | `make uninstall`   | Remove the installed binary                              |
 | `make clean`       | Remove compiled binaries from `bin/`                     |

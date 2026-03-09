@@ -12,6 +12,48 @@
 #include "funiq/Settings.h"
 #include "funiq/Matcher.h"
 
+// Custom help output that replaces TCLAP's verbose default with a compact,
+// man-page-style layout.
+class FuniqOutput : public TCLAP::CmdLineOutput {
+public:
+	virtual void version(TCLAP::CmdLineInterface& cmd) {
+		std::cout << cmd.getProgramName() << " " << cmd.getVersion() << std::endl;
+	}
+
+	virtual void usage(TCLAP::CmdLineInterface& cmd) {
+		std::cout
+			<< "funiq - Fuzzy unique line filtering (like uniq, but fuzzy)\n"
+			<< "\n"
+			<< "Usage: funiq [options] [filename]\n"
+			<< "\n"
+			<< "Options:\n"
+			<< "  -d <n>     Max distance threshold (default: 3)\n"
+			<< "  -m <name>  Comparison method: levenshtein (default), normalized-levenshtein\n"
+			<< "  -i         Case-insensitive matching\n"
+			<< "  -I         Ignore non-alphanumeric characters\n"
+			<< "  -c         Show duplicate counts (like uniq -c)\n"
+			<< "  -a         Show all duplicates, not just the representative\n"
+			<< "  -h         Show this help\n"
+			<< "  --version  Show version\n"
+			<< "\n"
+			<< "  If no filename is given, reads from stdin.\n"
+			<< "\n"
+			<< "Examples:\n"
+			<< "  funiq names.txt                                        Basic deduplication\n"
+			<< "  cat names.txt | funiq -iI                              Pipe, ignore case & symbols\n"
+			<< "  funiq -iI -d 5 names.txt                               Higher edit distance\n"
+			<< "  funiq -iI -m normalized-levenshtein -d 0.125 file.txt  Length-independent matching\n"
+			<< "  funiq -iI -c names.txt                                 Count duplicates\n"
+			<< "  grep error log.txt | funiq -iI -d 5 | sort            Combine with other tools\n";
+	}
+
+	virtual void failure(TCLAP::CmdLineInterface& cmd, TCLAP::ArgException& e) {
+		std::cerr << "Error: " << e.error() << " for arg " << e.argId() << "\n"
+		          << "Try: " << cmd.getProgramName() << " -h\n";
+		throw TCLAP::ExitException(1);
+	}
+};
+
 void parseCommandLine(int argc, char** argv, std::string& filename, Settings& settings) {
 
 	// Strip directory path from argv[0] so --help and --version display
@@ -22,26 +64,11 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 		progName = progName.substr(pos + 1);
 	argv[0] = const_cast<char*>(progName.c_str());
 
-	TCLAP::CmdLine cmd(
-		"funiq - Fuzzy Unique Filtering\n\n"
-		"Examples:\n\n"
-		"  Deduplicate a file with default settings (edit distance <= 3):\n"
-		"    funiq names.txt\n\n"
-		"  Pipe from another command:\n"
-		"    cat names.txt | funiq\n\n"
-		"  Ignore case and non-alphanumeric characters:\n"
-		"    funiq -iI names.txt\n\n"
-		"  Increase the edit distance threshold:\n"
-		"    funiq -iI -d 5 names.txt\n\n"
-		"  Use normalized Levenshtein (0.0-1.0 scale) for length-independent matching:\n"
-		"    funiq -iI -m normalized-levenshtein -d 0.125 names.txt\n\n"
-		"  Show duplicate counts (like uniq -c):\n"
-		"    funiq -iI -c names.txt\n\n"
-		"  Show all duplicates grouped with their match:\n"
-		"    funiq -iI -a names.txt\n\n"
-		"  Combine with sort and other tools:\n"
-		"    grep -i error log.txt | funiq -iI -d 5 | sort",
-		' ', "0.4.0");
+	TCLAP::CmdLine cmd("", ' ', "0.4.0");
+
+	// Replace TCLAP's default verbose output with our compact format
+	FuniqOutput customOutput;
+	cmd.setOutput(&customOutput);
 
 	TCLAP::UnlabeledValueArg<std::string> filenameArg (
 		"filename",
@@ -49,25 +76,20 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 		false, "", "filename");
 	TCLAP::ValueArg<float> distanceArg(
 		"d","distance",
-		"Maximum distance threshold between two strings to be considered duplicates.\n"
-		"For the default Levenshtein comparison method, it is the maximum edit distance "
-		"allowed for two strings to be considered duplicates.\n"
-		"For the Normalized Levenshtein comparison method, it is a number between 0.0 and 1.0 "
-		"representing 0% and 100% similarity respectively.",
+		"Max distance threshold (default: 3)",
 		false, 3, "number");
 	TCLAP::SwitchArg caseSwitch(
 		"i","case-insensitive",
-		"When active, case differences do not contribute to distance between strings.");
+		"Case-insensitive matching");
 	TCLAP::SwitchArg showAllSwitch(
 		"a","show-all",
-		"Will show all found duplicates");
+		"Show all duplicates");
 	TCLAP::SwitchArg showTotalsSwitch(
 		"c","show-counts",
-		"Precede each output line with the count of the number of times the line occurred "
-		"in the input, followed by a single space.");
+		"Show duplicate counts");
 	TCLAP::SwitchArg ignoreNonAlphaNumericSwitch(
 		"I","ignore-non-alpha-numeric",
-		"When active, non-alphanumeric characters do not contribute to edit distance.");
+		"Ignore non-alphanumeric characters");
 
 	std::vector<std::string> allowedComparisonMethods;
 	allowedComparisonMethods.push_back("levenshtein");
@@ -76,7 +98,7 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 
 	TCLAP::ValueArg<std::string> comparisonMethodArg(
 			"m","method",
-			"The method used to compare similarity of strings. Defaults to 'levenshtein'",
+			"Comparison method (default: levenshtein)",
 			false, "levenshtein", &comparisonMethodsConstraint);
 
 	cmd.add(filenameArg);
@@ -138,6 +160,9 @@ int main(int argc, char* argv[]) {
 		}
 
 		matcher.show(&std::cout);
+		// Explicitly flush stdout so downstream programs in a pipe chain
+		// (e.g. funiq ... | bat) receive all output before we exit.
+		std::cout.flush();
 
 	} catch (TCLAP::ArgException &e) {
 		std::cerr << "An error occurred: ";

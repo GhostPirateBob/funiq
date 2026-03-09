@@ -45,7 +45,7 @@ jobs:
       - name: build (Windows)
         if: runner.os == 'Windows'
         run: |
-          mkdir bin
+          if (!(Test-Path bin)) { mkdir bin }
           g++ -Wall -g -std=c++11 -O2 -Ilib src/funiq.cpp -o bin/funiq.exe
 
       - name: test (Windows)
