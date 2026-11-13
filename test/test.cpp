@@ -251,21 +251,150 @@ TEST_CASE( "addBatch with threads gives the same groups as serial add", "[matche
 		lines.push_back(s);
 	}
 
-	struct Case { ComparisonMethod method; float d; bool ci; };
-	const Case cases[] = { {Levenshtein, 3, false}, {Levenshtein, 1, true},
-	                       {NormalizedLevenshtein, 0.125f, false}, {NormalizedLevenshtein, 0.3f, true} };
+	struct Case { ComparisonMethod method; float d; bool ci; bool best; bool mask; bool scores; };
+	const Case cases[] = {
+		{Levenshtein, 3, false, false, false, false}, {Levenshtein, 1, true, false, false, false},
+		{NormalizedLevenshtein, 0.125f, false, false, false, false}, {NormalizedLevenshtein, 0.3f, true, false, false, false},
+		{Levenshtein, 3, false, true, false, true}, {NormalizedLevenshtein, 0.3f, true, true, false, false},
+		{Levenshtein, 2, false, false, true, false}, {TokenSort, 0.2f, false, false, false, true},
+		{Cosine, 0.2f, false, false, false, true}, {Cosine, 0.3f, true, true, true, false} };
 	for(const Case& c : cases) {
 		Settings settings;
 		settings.comparisonMethod = c.method;
 		settings.maxDistance = c.d;
 		settings.caseInsensitive = c.ci;
+		settings.bestMatch = c.best;
+		settings.maskDigits = c.mask;
+		settings.showScores = c.scores;
 		settings.showAllMatches = true;
 		settings.showTotals = true;
 
 		std::string serial = runMatcher(settings, lines, 0, &rng);
 		for(unsigned threads : {1u, 2u, 3u, 8u}) {
-			INFO("method=" << c.method << " d=" << c.d << " threads=" << threads);
+			INFO("method=" << c.method << " d=" << c.d << " best=" << c.best << " threads=" << threads);
 			REQUIRE(runMatcher(settings, lines, threads, &rng) == serial);
 		}
+	}
+}
+
+static std::vector<std::string> showLines(Matcher& matcher) {
+	std::stringstream output;
+	matcher.show(&output);
+	std::vector<std::string> out;
+	for(std::string line; std::getline(output, line); ) out.push_back(line);
+	return out;
+}
+
+TEST_CASE( "--mask-digits: lines differing only in numbers become duplicates", "[tier3]" ) {
+	Settings settings;
+	settings.maxDistance = 0;
+	settings.showTotals = true;
+	settings.maskDigits = true;
+	Matcher matcher(settings);
+	matcher.add("pid 123 exited at 10:42:07");
+	matcher.add("pid 98765 exited at 09:01:59");
+	matcher.add("pid exited");
+	REQUIRE(showLines(matcher) == std::vector<std::string>{
+		"      2 pid 123 exited at 10:42:07", "      1 pid exited" });
+}
+
+TEST_CASE( "-m token-sort: word order does not matter", "[tier3]" ) {
+	Settings settings;
+	settings.comparisonMethod = TokenSort;
+	settings.maxDistance = 0;
+	settings.showTotals = true;
+	Matcher matcher(settings);
+	matcher.add("connection reset by peer");
+	matcher.add("peer by reset connection");
+	matcher.add("connection refused");
+	REQUIRE(showLines(matcher) == std::vector<std::string>{
+		"      1 connection refused", "      2 connection reset by peer" });
+}
+
+TEST_CASE( "-m token-sort with -I treats punctuation as a word separator", "[tier3]" ) {
+	Settings settings;
+	settings.comparisonMethod = TokenSort;
+	settings.ignoreNonAlphaNumeric = true;
+	settings.maxDistance = 0;
+	settings.showTotals = true;
+	Matcher matcher(settings);
+	matcher.add("user=bob,ip=10.0.0.1");
+	matcher.add("ip=10.0.0.1 user=bob");
+	REQUIRE(showLines(matcher) == std::vector<std::string>{ "      2 user=bob,ip=10.0.0.1" });
+}
+
+TEST_CASE( "-m cosine: reordered fields match where edit distance does not", "[tier3]" ) {
+	const char* a = "user=alice action=login status=ok";
+	const char* b = "status=ok action=login user=alice";
+	const char* c = "disk full on /dev/sda1";
+	for(ComparisonMethod method : {NormalizedLevenshtein, Cosine}) {
+		Settings settings;
+		settings.comparisonMethod = method;
+		settings.maxDistance = 0.3f;
+		Matcher matcher(settings);
+		matcher.add(a); matcher.add(b); matcher.add(c);
+		size_t groups = showLines(matcher).size();
+		INFO("method=" << method);
+		REQUIRE(groups == (method == Cosine ? 2u : 3u));
+	}
+}
+
+TEST_CASE( "similarity::cosineDistance basics", "[tier3]" ) {
+	REQUIRE(similarity::cosineDistance(similarity::trigramProfile("abcdef"),
+	                                   similarity::trigramProfile("abcdef")) == Approx(0.0));
+	REQUIRE(similarity::cosineDistance(similarity::trigramProfile("abcdef"),
+	                                   similarity::trigramProfile("uvwxyz")) == Approx(1.0));
+	REQUIRE(similarity::cosineDistance(similarity::trigramProfile(""),
+	                                   similarity::trigramProfile("")) == Approx(0.0));
+	REQUIRE(similarity::cosineDistance(similarity::trigramProfile("ab"),
+	                                   similarity::trigramProfile("ab")) == Approx(0.0));
+}
+
+TEST_CASE( "--rep longest: the longest member represents the group", "[tier3]" ) {
+	Settings settings;
+	settings.maxDistance = 3;
+	settings.showTotals = true;
+	settings.representative = RepLongest;
+	Matcher matcher(settings);
+	matcher.add("abc");
+	matcher.add("abcdef");
+	matcher.add("abcd");
+	REQUIRE(showLines(matcher) == std::vector<std::string>{ "      3 abcdef" });
+}
+
+TEST_CASE( "--scores: each duplicate shows its distance from the group key", "[tier3]" ) {
+	Settings settings;
+	settings.maxDistance = 2;
+	settings.showScores = true;
+	Matcher matcher(settings);
+	matcher.add("hello");
+	matcher.add("hallo");
+	matcher.add("help!");
+	REQUIRE(showLines(matcher) == std::vector<std::string>{ "hello\thallo (1)\thelp! (2)" });
+
+	Settings normalized;
+	normalized.comparisonMethod = NormalizedLevenshtein;
+	normalized.maxDistance = 0.5f;
+	normalized.showScores = true;
+	Matcher matcher2(normalized);
+	matcher2.add("abcd");
+	matcher2.add("abce");
+	REQUIRE(showLines(matcher2) == std::vector<std::string>{ "abcd\tabce (0.250)" });
+}
+
+TEST_CASE( "--best: a line joins its closest group, not the first in range", "[tier3]" ) {
+	for(bool best : {false, true}) {
+		Settings settings;
+		settings.maxDistance = 2;
+		settings.showTotals = true;
+		settings.bestMatch = best;
+		Matcher matcher(settings);
+		matcher.add("aaaaaa");
+		matcher.add("aaabbb"); // distance 3 from "aaaaaa": new group
+		matcher.add("aaaabb"); // distance 2 from "aaaaaa", 1 from "aaabbb"
+		INFO("best=" << best);
+		REQUIRE(showLines(matcher) == (best
+			? std::vector<std::string>{ "      1 aaaaaa", "      2 aaabbb" }
+			: std::vector<std::string>{ "      2 aaaaaa", "      1 aaabbb" }));
 	}
 }

@@ -79,61 +79,84 @@ Use `-a` to show every matched string, not just the representative:
 	The Return of the King	Return of the King	Teh return of theking
 	The Two Towers	The Twin Towers	the towers
 
-Duplicates are shown tab-separated on the same line as their group.
+Duplicates are shown tab-separated on the same line as their group. Add `--scores` to see how far each duplicate is from its group (edits, or a 0.0–1.0 ratio for the normalized methods); it implies `-a`:
+
+	$ printf 'hello\nhallo\nhelp!\n' | funiq -d 2 --scores
+
+	hello	hallo (1)	help! (2)
+
+## Logs: masking digits
+
+Log lines that differ only in timestamps, PIDs, ports or IP addresses are usually the same event. `-D` (`--mask-digits`) compares every run of digits as a single `0`, so those lines become exact duplicates. That is both more accurate and much faster, because repeated lines are recognised without any comparison:
+
+	$ funiq --default -D -c error.log
+
+On 20,000 synthetic nginx lines this turns 13,024 groups into 109, and 5.5s into 0.2s.
+
+## Comparison methods
+
+`-m` picks how two lines are compared:
+
+| method | distance | good for |
+|---|---|---|
+| `levenshtein` (default) | edit count | short strings, fixed small typos |
+| `normalized-levenshtein` | edits ÷ longer length | mixed lengths; `--default` uses 0.125 |
+| `token-sort` | normalized, after sorting the words | the same words in a different order |
+| `cosine` | 1 − cosine similarity of character trigrams | reordered fields; very tolerant, so keep `-d` small |
+
+With `-m token-sort -I`, punctuation separates words (`user=bob,ip=1` has the words `1 bob ip user`).
+
+## Choosing groups and representatives
+
+By default a line joins the **first** existing group within range, and the group is printed as the first line that started it. `--best` joins the **closest** group instead (ties go to the older group). `--rep longest` prints each group as its longest member, which is often the most informative.
+
+## Threads
+
+Matching runs on all CPU cores by default; `-j <n>` sets the number of threads. The output is identical for any thread count.
 
 # Usage
 
 Funiq can read from a file or have its input piped from stdin.
 
-    USAGE:
+<!-- usage:start (generated from `funiq -h`; test/cli_test.sh checks it) -->
+```
+funiq - Fuzzy unique line filtering (like uniq, but fuzzy)
 
-       funiq  [-I] [-c] [-a] [-i] [-d <number>] [-m <levenshtein
-              |normalized-levenshtein>] [--] [--version] [-h] <filename>
+Usage: funiq [options] [filename]
 
+Options:
+  -d <n>     Max distance threshold (default: 3 edits for levenshtein,
+             0.125 for normalized-levenshtein and token-sort, 0.05 for cosine)
+  -m <name>  Comparison method:
+               levenshtein             edit distance (default)
+               normalized-levenshtein  edits / longer length (0.0-1.0)
+               token-sort              normalized, ignoring word order
+               cosine                  1 - trigram cosine similarity (0.0-1.0)
+  -i         Case-insensitive matching
+  -I         Ignore non-alphanumeric characters (word separators for token-sort)
+  -D         Mask digits: each run of digits compares as a single 0
+  -c         Show duplicate counts (like uniq -c)
+  -a         Show all duplicates, not just the representative
+  --scores   Show each duplicate's distance from its group (implies -a)
+  --best     Join the closest group instead of the first within range
+  --rep <r>  Group representative: first (default) or longest
+  --default  Shorthand for -iI -m normalized-levenshtein -d 0.125
+  -j <n>     Worker threads (default: all CPU cores; output is identical)
+  -h         Show this help
+  --version  Show version
 
-    Where:
+  If no filename is given, reads from stdin.
 
-       -I,  --ignore-non-alpha-numeric
-         When active, non-alphanumeric characters do not contribute to edit
-         distance.
-
-       -c,  --show-counts
-         Precede each output line with the count of the number of times the
-         line occurred in the input, followed by a single space.
-
-       -a,  --show-all
-         Will show all found duplicates
-
-       -i,  --case-insensitive
-         When active, case differences do not contribute to distance between
-         strings.
-
-       -d <number>,  --distance <number>
-         Maximum distance threshold between two strings to be considered
-         duplicates.
-
-         For the default Levenshtein comparison method, it is the maximum edit
-         distance allowed for two strings to be considered duplicates.
-
-         For the Normalized Levenshtein comparison method, it is a number
-         between 0.0 and 1.0 representing 0% and 100% similarity respectively.
-
-       -m <levenshtein|normalized-levenshtein>,  --method <levenshtein
-          |normalized-levenshtein>
-         The method used to compare similarity of strings. Defaults to
-         'levenshtein'
-
-       --,  --ignore_rest
-         Ignores the rest of the labeled arguments following this flag.
-
-       --version
-         Displays version information and exits.
-
-       -h,  --help
-         Displays usage information and exits.
-
-       <filename>
-         File to read. If omitted will read from stdin.
+Examples:
+  funiq names.txt                                        Basic deduplication
+  cat names.txt | funiq -iI                              Pipe, ignore case & symbols
+  funiq -iI -d 5 names.txt                               Higher edit distance
+  funiq -iI -m normalized-levenshtein -d 0.125 file.txt  Length-independent matching
+  funiq -iI -c names.txt                                 Count duplicates
+  grep error log.txt | funiq -iI -d 5 | sort            Combine with other tools
+  funiq --default -D -c error.log                        Logs: ignore PIDs, times, IPs
+```
+<!-- usage:end -->
 
 # Installation
 
