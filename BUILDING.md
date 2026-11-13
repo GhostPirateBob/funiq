@@ -12,7 +12,7 @@ make install    # copy it onto your PATH
 | platform | compiler | notes |
 |---|---|---|
 | Linux x86_64, arm64 | g++ (any C++11) | verified on Ubuntu 24.04 x86_64 and aarch64 |
-| Windows | MinGW-w64 (winlibs, scoop `mingw-winlibs`/`gcc`, MSYS2) | linked `-static`: the `.exe` only imports KERNEL32 and msvcrt |
+| Windows | MinGW-w64 (winlibs, scoop `mingw-winlibs`/`gcc`, MSYS2) | linked `-static`: the `.exe` imports only Windows' own DLLs (see Runtime dependencies) |
 | Windows | Cygwin g++ | works; the binary needs `cygwin1.dll`, `cygstdc++-6.dll`, `cyggcc_s-seh-1.dll` |
 
 Any GNU make works: Linux make, scoop/avr-gcc make, `mingw32-make`, Cygwin make. On Windows the recipes run under the `sh` from Git for Windows, MSYS2 or Cygwin, so one of those must be on PATH.
@@ -29,7 +29,11 @@ Any GNU make works: Linux make, scoop/avr-gcc make, `mingw32-make`, Cygwin make.
 
 ### Runtime dependencies
 
-- **Windows (MinGW build):** none beyond Windows itself.
+- **Windows (MinGW build):** none beyond Windows itself. The `.exe` imports `KERNEL32.dll` plus one of Windows' C runtimes, depending on how the MinGW toolchain was built:
+  - **msvcrt** toolchains (e.g. winlibs' `msvcrt` builds) import `msvcrt.dll`, present on every Windows version;
+  - **UCRT** toolchains (e.g. scoop `mingw-winlibs`, MSYS2 UCRT64, and the GitHub runner that builds the release `.exe`) import the Universal CRT's `api-ms-win-crt-*.dll`, built into Windows 10 and 11 (older Windows needs update KB2999226).
+
+  `make toolchain` shows which one you have (the target and compiler), and `objdump -p bin/funiq.exe | grep "DLL Name"` lists the imports.
 - **Linux:** `libstdc++.so.6`, `libgcc_s.so.1`, `libc.so.6`, `libm.so.6`, all present on any glibc distro with a C++ runtime. A binary built on a newer distro can fail on an older one with a `GLIBCXX_...` version error. The release binaries avoid this by linking fully static (`make LDFLAGS=-static`).
 
 ## Make targets
