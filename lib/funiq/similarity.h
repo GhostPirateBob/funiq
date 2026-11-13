@@ -58,7 +58,12 @@ namespace similarity {
 	//  3. Ukkonen band: only cells with |i - j| <= k can stay <= k
 	//  4. abort as soon as a whole row exceeds k (rows never decrease)
 	// Technique follows rapidfuzz-cpp's uniform_levenshtein_distance (MIT).
-	unsigned int boundedLevenshtein(const std::string& s1, const std::string& s2, unsigned int k) {
+	// `scratch` holds the two DP rows; pass the same vector to every call
+	// (one per thread) so the hot loop never allocates. Deliberately not a
+	// thread_local: MinGW static builds can run non-trivial thread_local
+	// destructors after their TLS storage is freed, corrupting the heap.
+	unsigned int boundedLevenshtein(const std::string& s1, const std::string& s2, unsigned int k,
+	                                std::vector<unsigned int>& scratch) {
 		const std::string* longer = &s1;
 		const std::string* shorter = &s2;
 		if(longer->size() < shorter->size()) std::swap(longer, shorter);
@@ -73,13 +78,17 @@ namespace similarity {
 		while(m > 0 && a[n - 1] == b[m - 1]) { n--; m--; }
 		if(m == 0) return n; // n <= k, guaranteed by the length bound
 
-		// Reused across calls: no allocation in the hot loop.
-		static std::vector<unsigned int> prev, cur;
-		if(prev.size() < m + 2) { prev.resize(m + 2); cur.resize(m + 2); }
+		if(scratch.size() < 2 * (m + 2)) scratch.resize(2 * (m + 2));
+		unsigned int* prev = scratch.data();
+		unsigned int* cur = prev + (m + 2);
 		const unsigned int INF = k + 1; // anything > k is "too far"
 
-		for(unsigned int j = 0; j <= m; j++) prev[j] = std::min(j, INF);
-		prev[m + 1] = INF;
+		// Row 0 only needs initialising inside the band: row i reads prev up
+		// to column i + k, and every later row writes its own INF sentinel
+		// just past its band. With early abort most calls finish within a
+		// few rows, so initialising all m + 1 cells used to dominate.
+		const unsigned int initEnd = std::min(m, k + 1);
+		for(unsigned int j = 0; j <= initEnd; j++) prev[j] = std::min(j, INF);
 		for(unsigned int i = 1; i <= n; i++) {
 			unsigned int lo = i > k ? i - k : 1;
 			unsigned int hi = std::min(m, i + k);
@@ -94,9 +103,15 @@ namespace similarity {
 			}
 			if(hi < m) cur[hi + 1] = INF;
 			if(rowMin > k) return k + 1;
-			prev.swap(cur);
+			std::swap(prev, cur);
 		}
 		return std::min(prev[m], INF);
+	}
+
+	// Convenience overload for one-off calls; allocates its own rows.
+	unsigned int boundedLevenshtein(const std::string& s1, const std::string& s2, unsigned int k) {
+		std::vector<unsigned int> scratch;
+		return boundedLevenshtein(s1, s2, k, scratch);
 	}
 }
 

@@ -12,6 +12,8 @@
 #include <iostream>
 #include <map>
 #include <string>
+#include <thread>
+#include <vector>
 
 #ifdef _WIN32
 #include <fcntl.h>
@@ -49,6 +51,7 @@ public:
 			<< "  -c         Show duplicate counts (like uniq -c)\n"
 			<< "  -a         Show all duplicates, not just the representative\n"
 			<< "  --default  Shorthand for -iI -m normalized-levenshtein -d 0.125\n"
+			<< "  -j <n>     Worker threads (default: all CPU cores; output is identical)\n"
 			<< "  -h         Show this help\n"
 			<< "  --version  Show version\n"
 			<< "\n"
@@ -80,7 +83,7 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 		progName = progName.substr(pos + 1);
 	argv[0] = const_cast<char*>(progName.c_str());
 
-	TCLAP::CmdLine cmd("", ' ', "0.4.2");
+	TCLAP::CmdLine cmd("", ' ', "1.0.0");
 
 	// Replace TCLAP's default verbose output with our compact format
 	FuniqOutput customOutput;
@@ -109,6 +112,10 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 	TCLAP::SwitchArg defaultSwitch(
 		"","default",
 		"Shorthand for -iI -m normalized-levenshtein -d 0.125");
+	TCLAP::ValueArg<unsigned> threadsArg(
+		"j","threads",
+		"Worker threads (default: all CPU cores)",
+		false, 0, "n");
 
 	std::vector<std::string> allowedComparisonMethods;
 	allowedComparisonMethods.push_back("levenshtein");
@@ -128,7 +135,12 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 	cmd.add(showTotalsSwitch);
 	cmd.add(ignoreNonAlphaNumericSwitch);
 	cmd.add(defaultSwitch);
+	cmd.add(threadsArg);
 	cmd.parse(argc, argv);
+
+	settings.threads = threadsArg.getValue();
+	if(settings.threads == 0) settings.threads = std::thread::hardware_concurrency();
+	if(settings.threads == 0) settings.threads = 1; // hardware_concurrency() may not know
 
 	// --default sets sensible defaults for general-purpose fuzzy matching
 	if(defaultSwitch.getValue()) {
@@ -220,10 +232,7 @@ int main(int argc, char* argv[]) {
 
 		auto startTime = std::chrono::steady_clock::now();
 
-		for (std::string line; getline(inputStream, line); ) {
-			matcher.add(line);
-			lineCount++;
-			if(showProgress && (lineCount % 50 == 0)) {
+		auto drawProgress = [&]() {
 				auto now = std::chrono::steady_clock::now();
 				double elapsed = std::chrono::duration<double>(now - startTime).count();
 				double rate = (elapsed > 0) ? lineCount / elapsed : 0;
@@ -244,7 +253,26 @@ int main(int argc, char* argv[]) {
 				}
 				std::cerr << " [" << std::fixed << std::setprecision(1)
 				          << rate << " lines/s]  " << std::flush;
+		};
+
+		// Lines are matched in batches so each batch's scan against existing
+		// groups can run on several threads (Matcher::addBatch gives the same
+		// result as adding lines one by one). Larger batches give threads
+		// more work per round; smaller ones keep the serial in-batch check
+		// cheap when nearly every line starts a new group.
+		const size_t BATCH_SIZE = 256;
+		std::vector<std::string> batch;
+		batch.reserve(BATCH_SIZE);
+		for(std::string line; ; ) {
+			bool more = static_cast<bool>(getline(inputStream, line));
+			if(more) batch.push_back(line);
+			if(!batch.empty() && (batch.size() == BATCH_SIZE || !more)) {
+				matcher.addBatch(batch, settings.threads);
+				lineCount += batch.size();
+				batch.clear();
+				if(showProgress) drawProgress();
 			}
+			if(!more) break;
 		}
 
 		// Clear the progress line before outputting results

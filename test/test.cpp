@@ -217,3 +217,55 @@ TEST_CASE( "a line joins only the first group it matches", "[matcher]" ) {
 	REQUIRE(getNextLine(&output) == "      1 bb");
 	REQUIRE(getNextLine(&output) == "");
 }
+
+static std::string runMatcher(Settings settings, const std::vector<std::string>& lines,
+                              unsigned threads, std::mt19937* splitRng) {
+	Matcher matcher(settings);
+	if(threads == 0) {
+		for(const auto& line : lines) matcher.add(line);
+	} else {
+		// Feed addBatch randomly sized chunks, including empty ones.
+		size_t pos = 0;
+		while(pos < lines.size()) {
+			size_t n = std::min(lines.size() - pos, (size_t)((*splitRng)() % 40));
+			std::vector<std::string> chunk(lines.begin() + pos, lines.begin() + pos + n);
+			matcher.addBatch(chunk, threads);
+			pos += n;
+		}
+	}
+	std::stringstream output;
+	matcher.show(&output);
+	return output.str();
+}
+
+TEST_CASE( "addBatch with threads gives the same groups as serial add", "[matcher][threads]" ) {
+	std::mt19937 rng(424242);
+	// Lines built from a few templates with small random edits, so there
+	// are near-duplicates, exact repeats, and lines matching several groups.
+	const char* templates[] = { "error at line ##", "warning: x## not found", "GET /a/## 200", "ok" };
+	std::vector<std::string> lines;
+	for(int i = 0; i < 600; i++) {
+		std::string s = templates[rng() % 4];
+		for(auto& c : s) if(c == '#') c = '0' + rng() % 10;
+		if(rng() % 5 == 0 && !s.empty()) s[rng() % s.size()] = 'a' + rng() % 26;
+		lines.push_back(s);
+	}
+
+	struct Case { ComparisonMethod method; float d; bool ci; };
+	const Case cases[] = { {Levenshtein, 3, false}, {Levenshtein, 1, true},
+	                       {NormalizedLevenshtein, 0.125f, false}, {NormalizedLevenshtein, 0.3f, true} };
+	for(const Case& c : cases) {
+		Settings settings;
+		settings.comparisonMethod = c.method;
+		settings.maxDistance = c.d;
+		settings.caseInsensitive = c.ci;
+		settings.showAllMatches = true;
+		settings.showTotals = true;
+
+		std::string serial = runMatcher(settings, lines, 0, &rng);
+		for(unsigned threads : {1u, 2u, 3u, 8u}) {
+			INFO("method=" << c.method << " d=" << c.d << " threads=" << threads);
+			REQUIRE(runMatcher(settings, lines, threads, &rng) == serial);
+		}
+	}
+}
