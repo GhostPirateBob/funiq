@@ -2,11 +2,17 @@ CXX=g++
 CXXFLAGS=-Wall -g -std=c++11
 OPT_FLAG=-O2
 
-# Windows (MinGW): fully static so the .exe runs without libstdc++-6.dll,
-# libgcc_s_seh-1.dll or libwinpthread-1.dll (-static-libstdc++ alone still
-# leaves winpthread as a dependency on posix-thread toolchains).
 ifeq ($(OS),Windows_NT)
   EXE=.exe
+endif
+
+# MinGW: fully static so the .exe runs without libstdc++-6.dll,
+# libgcc_s_seh-1.dll or libwinpthread-1.dll (-static-libstdc++ alone still
+# leaves winpthread as a dependency on posix-thread toolchains).
+# Keyed on the compiler's target, not the OS: Cygwin also sets
+# OS=Windows_NT, but its binaries always need cygwin1.dll and a -static
+# libstdc++ link fails there (duplicate std::logic_error symbols).
+ifneq (,$(findstring mingw,$(shell $(CXX) -dumpmachine)))
   LDFLAGS+=-static
 endif
 OUT=bin/funiq$(EXE)
