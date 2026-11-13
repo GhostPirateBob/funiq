@@ -30,11 +30,18 @@ OUT=bin/funiq$(EXE)
 OUT_TEST=bin/funiq_test$(EXE)
 HEADERS=$(wildcard lib/funiq/*.h)
 
-# Use DESTDIR and PREFIX for flexible install paths.
+# Use DESTDIR and PREFIX for flexible install paths, or set BINDIR directly
+# (e.g. make install BINDIR=C:/PROGRAMS/__PATH).
 # If PREFIX is not set, try ~/.local/bin first (no sudo needed), then
 # fall back to /usr/local/bin, and finally /usr/bin as a last resort.
+# On Windows always use ~/.local/bin: /usr there would resolve inside
+# whichever Git/MSYS/Cygwin sh runs the recipe, not a real system path.
 DESTDIR=
-ifndef PREFIX
+ifeq ($(OS),Windows_NT)
+  # HOME may be unset or use backslashes, which sh treats as escapes.
+  USERHOME := $(subst \,/,$(or $(HOME),$(USERPROFILE)))
+  PREFIX ?= $(USERHOME)/.local
+else ifndef PREFIX
   ifneq ($(wildcard $(HOME)/.local/bin),)
     PREFIX=$(HOME)/.local
   else ifneq ($(wildcard /usr/local/bin),)
@@ -43,7 +50,7 @@ ifndef PREFIX
     PREFIX=/usr
   endif
 endif
-BINDIR=$(DESTDIR)$(PREFIX)/bin
+BINDIR ?= $(DESTDIR)$(PREFIX)/bin
 
 all: build test
 
@@ -78,15 +85,15 @@ $(OUT): src/funiq.cpp $(HEADERS)
 install: build
 	@install -d $(BINDIR) 2>/dev/null || \
 		(echo "Error: Permission denied writing to $(BINDIR). Try: sudo make install" && exit 1)
-	@install -m 755 $(OUT) $(BINDIR)/funiq 2>/dev/null || \
+	@install -m 755 $(OUT) $(BINDIR)/funiq$(EXE) 2>/dev/null || \
 		(echo "Error: Permission denied writing to $(BINDIR). Try: sudo make install" && exit 1)
-	@echo "Installed funiq to $(BINDIR)/funiq"
+	@echo "Installed funiq to $(BINDIR)/funiq$(EXE)"
 
 # Remove the installed binary
 uninstall:
-	@rm -f $(BINDIR)/funiq 2>/dev/null || \
+	@rm -f $(BINDIR)/funiq$(EXE) 2>/dev/null || \
 		(echo "Error: Permission denied. Try: sudo make uninstall" && exit 1)
-	@echo "Removed $(BINDIR)/funiq"
+	@echo "Removed $(BINDIR)/funiq$(EXE)"
 
 clean:
 	rm -f $(OUT) $(OUT_TEST)
