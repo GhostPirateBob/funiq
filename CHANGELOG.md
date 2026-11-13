@@ -5,6 +5,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [1.1.0] - 2026-11-13
+
+### Added
+- `-D/--mask-digits`: each run of digits compares as a single `0`, so log lines differing
+  only in timestamps, PIDs or IPs become duplicates (20k synthetic nginx lines with
+  `--default`: 13,024 groups → 109, 5.5s → 0.2s)
+- `-m token-sort`: normalized Levenshtein on alphabetically sorted words (word order ignored;
+  with `-I`, punctuation separates words)
+- `-m cosine`: 1 − cosine similarity of exact character-trigram counts; order-tolerant.
+  Default threshold 0.05 (deliberately tight: on access logs 0.2 merged different request
+  paths because shared User-Agent strings dominate); not yet tuned on real data
+- `--best`: join the closest group instead of the first within range (ties go to the older group)
+- `--rep longest`: print each group as its longest member
+- `--scores`: print each duplicate's distance from its group key (implies `-a`)
+- All new modes give identical output for any `-j` thread count
+
+### Changed
+- README usage section is now the real `funiq -h` output, checked by the test suite
+
+### Fixed
+- Case folding and `-I` no longer pass negative `char` values to `tolower`/`isalnum`
+  (undefined behaviour for UTF-8 bytes)
+
 ## [1.0.0] - 2026-11-13
 
 Major version because some output changes (marked **breaking**). Changes since 0.4.2;

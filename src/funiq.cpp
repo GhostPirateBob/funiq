@@ -93,7 +93,7 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 		progName = progName.substr(pos + 1);
 	argv[0] = const_cast<char*>(progName.c_str());
 
-	TCLAP::CmdLine cmd("", ' ', "1.0.0");
+	TCLAP::CmdLine cmd("", ' ', "1.1.0");
 
 	// Replace TCLAP's default verbose output with our compact format
 	FuniqOutput customOutput;
