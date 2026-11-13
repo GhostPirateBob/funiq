@@ -30,7 +30,7 @@ Any GNU make works: Linux make, scoop/avr-gcc make, `mingw32-make`, Cygwin make.
 ### Runtime dependencies
 
 - **Windows (MinGW build):** none beyond Windows itself.
-- **Linux:** `libstdc++.so.6`, `libgcc_s.so.1`, `libc.so.6`, `libm.so.6`, all present on any glibc distro with a C++ runtime. A binary built on a newer distro can fail on an older one with a `GLIBCXX_...` version error; build on the oldest target, or see TODO.md for a static-libstdc++ option.
+- **Linux:** `libstdc++.so.6`, `libgcc_s.so.1`, `libc.so.6`, `libm.so.6`, all present on any glibc distro with a C++ runtime. A binary built on a newer distro can fail on an older one with a `GLIBCXX_...` version error. The release binaries avoid this by linking fully static (`make LDFLAGS=-static`).
 
 ## Make targets
 
@@ -93,4 +93,29 @@ Use literal paths in such one-liners: a variable that ends up empty turns `cd $D
 
 ## Continuous integration
 
-`.github/workflows/ccpp.yml` builds and tests on every push, on `ubuntu-latest` (make build, make test, make install) and `windows-latest` (static MinGW build, unit and CLI tests), and uploads `funiq-linux-amd64` and `funiq-windows-amd64` as workflow artifacts.
+`.github/workflows/ci.yml` runs on every push to `master` and every pull request:
+
+- **lint:** first-party code must compile without warnings under g++ and clang++ (`-Wall -Wextra`, plus `-Wpedantic` for the tool itself); ShellCheck on the CLI tests; the Python helpers must compile.
+- **test:** `make all` (unit and CLI suites) and an install round trip on Linux x86_64, Linux arm64, Windows (MinGW, static) and macOS. On macOS and Windows the terminal tests are skipped, because they need util-linux `script`.
+
+## Releases
+
+`.github/workflows/publish.yml` runs when a `v*` tag is pushed:
+
+1. Bump the version in `src/funiq.cpp` (the `TCLAP::CmdLine` line) and add a `## [X.Y.Z]` section to CHANGELOG.md, then merge to `master`.
+2. `git tag -s vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`
+3. Each platform builds, reruns the full test suites against the release binary, checks the tag matches `funiq --version`, checks the binary is standalone, and packages it:
+
+   | archive | built as |
+   |---|---|
+   | `funiq-X.Y.Z-linux-x86_64.tar.gz` | fully static (`LDFLAGS=-static`) |
+   | `funiq-X.Y.Z-linux-arm64.tar.gz` | fully static |
+   | `funiq-X.Y.Z-windows-x86_64.zip` | static MinGW |
+   | `funiq-X.Y.Z-macos-universal.tar.gz` | arm64 and x86_64 in one binary |
+
+4. The release job writes `SHA256SUMS`, attests build provenance for every archive, and creates a **draft** release whose notes are the CHANGELOG section.
+5. Check the draft, then publish it: `gh release edit vX.Y.Z --draft=false`.
+
+Verify a download with `gh attestation verify <archive> --repo GhostPirateBob/funiq` and `sha256sum -c SHA256SUMS --ignore-missing`.
+
+A local equivalent of the Linux release build is `make LDFLAGS=-static all`.

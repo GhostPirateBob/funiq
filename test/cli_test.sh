@@ -7,6 +7,10 @@ set -u
 unset FORCE_COLOR NO_COLOR
 
 FUNIQ=${1:?usage: $0 path/to/funiq}
+# Terminal tests use util-linux script(1) to give funiq a tty. BSD script
+# (macOS) takes different arguments, and Windows has none: skip there.
+UTIL_LINUX_SCRIPT=0
+if [ "${OS:-}" != "Windows_NT" ] && script -V 2>&1 | grep -q util-linux; then UTIL_LINUX_SCRIPT=1; fi
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
@@ -127,8 +131,8 @@ if [ "$got" = "$want" ]; then ok "$name"; else ko "$name" "regenerate the README
 # --- non-seekable file argument with progress bar active --------------------
 # Progress (stderr is a tty) pre-counts lines then rewinds; a FIFO can't rewind.
 name="FIFO filename with tty stderr keeps all lines"
-if ! command -v script >/dev/null 2>&1 || [ "${OS:-}" = "Windows_NT" ]; then
-	sk "$name" "needs util-linux script(1) on a POSIX host"
+if [ "$UTIL_LINUX_SCRIPT" != 1 ]; then
+	sk "$name" "needs util-linux script(1)"
 else
 	seq 1 120 | sed 's/^/line unique-/' | awk '{print $0 "-" NR*7919}' > "$TMP/in.txt"
 	n=$(script -qec "'$FUNIQ' -d 0 <(cat '$TMP/in.txt') 2>/dev/tty | wc -l" /dev/null | tr -d '\r' | tail -1)
@@ -177,8 +181,8 @@ name="--long=value works for any option (--rep=longest)"
 [ "$(printf 'abc\nabcdef\n' | "$FUNIQ" --rep=longest -c)" = "      2 abcdef" ] && ok "$name" || ko "$name"
 
 name="a terminal gets colour by default, NO_COLOR=1 turns it off"
-if ! command -v script >/dev/null 2>&1 || [ "${OS:-}" = "Windows_NT" ]; then
-	sk "$name" "needs util-linux script(1) on a POSIX host"
+if [ "$UTIL_LINUX_SCRIPT" != 1 ]; then
+	sk "$name" "needs util-linux script(1)"
 else
 	t1=$(script -qec "'$FUNIQ' -c '$TMP/col.txt'" /dev/null)
 	t2=$(NO_COLOR=1 script -qec "'$FUNIQ' -c '$TMP/col.txt'" /dev/null)
