@@ -78,8 +78,12 @@ namespace similarity {
 		if(prev.size() < m + 2) { prev.resize(m + 2); cur.resize(m + 2); }
 		const unsigned int INF = k + 1; // anything > k is "too far"
 
-		for(unsigned int j = 0; j <= m; j++) prev[j] = std::min(j, INF);
-		prev[m + 1] = INF;
+		// Row 0 only needs initialising inside the band: row i reads prev up
+		// to column i + k, and every later row writes its own INF sentinel
+		// just past its band. With early abort most calls finish within a
+		// few rows, so initialising all m + 1 cells used to dominate.
+		const unsigned int initEnd = std::min(m, k + 1);
+		for(unsigned int j = 0; j <= initEnd; j++) prev[j] = std::min(j, INF);
 		for(unsigned int i = 1; i <= n; i++) {
 			unsigned int lo = i > k ? i - k : 1;
 			unsigned int hi = std::min(m, i + k);

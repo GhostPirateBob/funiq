@@ -38,9 +38,25 @@ private:
 	// first-match: groups created later have higher indices, so a repeat
 	// line's first match can never change.
 	std::unordered_map<std::string, size_t> groupOf;
+	// keyLengths[i] == groups[i].normalizedKey.size(), stored contiguously
+	// so the length pre-check scans one compact array instead of the groups.
+	std::vector<unsigned int> keyLengths;
 	std::string normalize(const std::string& s);
+	bool lengthRulesOut(unsigned int len, unsigned int keyLen) const;
 	bool isMatch(const std::string& s1, const std::string& s2);
 };
+
+// Distance is at least the length difference, so if even that fails the
+// threshold the pair can't match. Uses the same arithmetic as isMatch, so it
+// only ever skips pairs isMatch would reject (most of them, in practice).
+inline bool Matcher::lengthRulesOut(unsigned int len, unsigned int keyLen) const {
+	unsigned int diff = len > keyLen ? len - keyLen : keyLen - len;
+	if(_settings.comparisonMethod == NormalizedLevenshtein) {
+		unsigned int maxLen = std::max(len, keyLen);
+		return maxLen > 0 && (float)diff / (float)maxLen > _settings.maxDistance;
+	}
+	return diff > _settings.maxDistance;
+}
 
 Matcher::Matcher(Settings& settings):_settings(settings) {
 }
@@ -75,7 +91,9 @@ void Matcher::add(std::string line) {
 	// re-normalizing existing keys on every insertion. A line joins only
 	// the first group it matches, so counts sum to the number of lines.
 	if(g == groups.size()) {
+		const unsigned int len = normalizedLine.size();
 		for(size_t i = 0; i < groups.size(); i++) {
+			if(lengthRulesOut(len, keyLengths[i])) continue;
 			if(isMatch(normalizedLine, groups[i].normalizedKey)) {
 				g = i;
 				break;
@@ -92,6 +110,7 @@ void Matcher::add(std::string line) {
 		group.normalizedKey = normalizedLine;
 		group.matches.push_back(line);
 		groups.push_back(std::move(group));
+		keyLengths.push_back(normalizedLine.size());
 	}
 }
 
