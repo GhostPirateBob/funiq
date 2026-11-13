@@ -24,7 +24,8 @@ struct Settings
 		maskDigits(false),
 		representative(RepFirst),
 		showScores(false),
-		bestMatch(false)
+		bestMatch(false),
+		color(false)
 		{}
 
 	float maxDistance;
@@ -38,6 +39,7 @@ struct Settings
 	Representative representative;
 	bool showScores;  // print each duplicate's distance from its group key (implies -a)
 	bool bestMatch;   // join the closest group instead of the first one in range
+	bool color;       // colour stdout (decided once, see color::want)
 	int totalsFieldWidth;
 };
 

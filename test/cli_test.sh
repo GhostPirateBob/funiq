@@ -3,6 +3,8 @@
 # real binary (exit codes, raw stdout bytes, argument defaults, tty paths).
 # Usage: test/cli_test.sh path/to/funiq
 set -u
+# Colour is decided from these; the caller's environment must not leak in.
+unset FORCE_COLOR NO_COLOR
 
 FUNIQ=${1:?usage: $0 path/to/funiq}
 TMP=$(mktemp -d)
@@ -78,6 +80,10 @@ golden golden-norm-0.3-counts.txt -c -m normalized-levenshtein -d 0.3
 golden golden-d40-counts.txt -d 40 -c
 golden golden-norm-1-counts.txt -m normalized-levenshtein -d 1 -c
 golden golden-iI-norm-0.05-all.txt -iI -m normalized-levenshtein -d 0.05 -a
+# Bare -d (not followed by a number) is the --default preset
+golden golden-default-preset-counts.txt -d -c
+golden golden-default-preset-counts.txt -c -d
+golden golden-default-preset-counts.txt -c -j 2 -d
 # Thread count must never change results
 golden golden-default-preset-counts.txt --default -c -j 1
 golden golden-default-preset-counts.txt --default -c -j 8
@@ -124,6 +130,62 @@ else
 	seq 1 120 | sed 's/^/line unique-/' | awk '{print $0 "-" NR*7919}' > "$TMP/in.txt"
 	n=$(script -qec "'$FUNIQ' -d 0 <(cat '$TMP/in.txt') 2>/dev/tty | wc -l" /dev/null | tr -d '\r' | tail -1)
 	if [ "$n" = "120" ]; then ok "$name"; else ko "$name" "got '$n' lines, want 120"; fi
+fi
+
+# --- colour ------------------------------------------------------------------
+ESC=$(printf '\033')
+strip() { sed "s/${ESC}\[[0-9;]*m//g"; }
+has_esc() { grep -q "$ESC"; }
+printf 'aaaa\naaab\nzzzz\n' > "$TMP/col.txt"
+plain=$("$FUNIQ" -c --scores -d 1 "$TMP/col.txt")
+
+name="piped output has no colour by default"
+if "$FUNIQ" -c --scores -d 1 "$TMP/col.txt" | has_esc; then ko "$name"; else ok "$name"; fi
+
+for form in "--color=always" "--color always"; do
+	name="$form colours output; stripped it equals the plain output"
+	out=$("$FUNIQ" $form -c --scores -d 1 "$TMP/col.txt")
+	if printf '%s' "$out" | has_esc && [ "$(printf '%s' "$out" | strip)" = "$plain" ]; then ok "$name"; else ko "$name"; fi
+done
+
+name="FORCE_COLOR=1 colours piped output"
+FORCE_COLOR=1 "$FUNIQ" -c "$TMP/col.txt" | has_esc && ok "$name" || ko "$name"
+name="--color=never beats FORCE_COLOR=1"
+FORCE_COLOR=1 "$FUNIQ" --color=never -c "$TMP/col.txt" | has_esc && ko "$name" || ok "$name"
+name="FORCE_COLOR=1 beats NO_COLOR=1"
+FORCE_COLOR=1 NO_COLOR=1 "$FUNIQ" -c "$TMP/col.txt" | has_esc && ok "$name" || ko "$name"
+name="FORCE_COLOR=0 keeps output plain"
+FORCE_COLOR=0 "$FUNIQ" -c "$TMP/col.txt" | has_esc && ko "$name" || ok "$name"
+name="--color rejects unknown values"
+"$FUNIQ" --color=sometimes "$TMP/col.txt" >/dev/null 2>&1 && ko "$name" || ok "$name"
+
+name="errors on stderr are coloured with --color=always, plain otherwise"
+e1=$("$FUNIQ" --color=always "$TMP/nope.txt" 2>&1 >/dev/null)
+e2=$("$FUNIQ" "$TMP/nope.txt" 2>&1 >/dev/null)
+if printf '%s' "$e1" | has_esc && ! printf '%s' "$e2" | has_esc \
+	&& [ "$(printf '%s' "$e1" | strip)" = "$e2" ]; then ok "$name"; else ko "$name" "e1=$e1 e2=$e2"; fi
+
+name="bare -d as the last argument reads stdin with the preset"
+[ "$(printf 'Hello, World\nhello world!\n' | "$FUNIQ" -c -d)" = "      2 Hello, World" ] && ok "$name" || ko "$name"
+name="-d <number> still sets the distance (lserrors-style call)"
+[ "$(printf 'abcdefgh\nabcdefgX\n' | "$FUNIQ" -iI -m normalized-levenshtein -d 0.1 -c | wc -l)" -eq 2 ] && ok "$name" || ko "$name"
+
+name="--long=value works for any option (--rep=longest)"
+[ "$(printf 'abc\nabcdef\n' | "$FUNIQ" --rep=longest -c)" = "      2 abcdef" ] && ok "$name" || ko "$name"
+
+name="a terminal gets colour by default, NO_COLOR=1 turns it off"
+if ! command -v script >/dev/null 2>&1 || [ "${OS:-}" = "Windows_NT" ]; then
+	sk "$name" "needs util-linux script(1) on a POSIX host"
+else
+	t1=$(script -qec "'$FUNIQ' -c '$TMP/col.txt'" /dev/null)
+	t2=$(NO_COLOR=1 script -qec "'$FUNIQ' -c '$TMP/col.txt'" /dev/null)
+	if printf '%s' "$t1" | has_esc && ! printf '%s' "$t2" | has_esc; then ok "$name"; else ko "$name"; fi
+
+	# The progress bar is for big inputs (50+ lines); its final newline is too,
+	# so drawing it for a few lines left a dangling bar before the results.
+	name="no progress bar for small inputs on a terminal"
+	t3=$(script -qec "'$FUNIQ' -c '$TMP/col.txt'" /dev/null)
+	if printf '%s' "$t3" | grep -q Processing; then ko "$name"; else ok "$name"; fi
 fi
 
 echo "cli: $pass passed, $fail failed, $skip skipped"

@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "Color.h"
 #include "Settings.h"
 #include "similarity.h"
 
@@ -261,17 +262,33 @@ void Matcher::show(std::ostream* output) {
 		return a.group->matches[a.rep] < b.group->matches[b.rep];
 	});
 
+	// Colour adds SGR codes around fields and changes nothing else, so the
+	// output with codes stripped is byte-identical to the plain output.
+	const bool on = _settings.color;
 	const bool all = _settings.showAllMatches || _settings.showScores;
 	for(const Row& row : rows) {
 		const MatchGroup& group = *row.group;
-		if(_settings.showTotals)
-			*output << std::setw(TOTALS_FIELD_WIDTH) << group.matches.size() << " "; // space for compatibility with GNU uniq
+		if(_settings.showTotals) {
+			// Pad first, then colour, so codes don't disturb the alignment.
+			// Frequency buckets make the hot lines of a log jump out.
+			const size_t n = group.matches.size();
+			std::ostringstream count;
+			count << std::setw(TOTALS_FIELD_WIDTH) << n;
+			const color::Style& style = n >= 100 ? color::BoldRed : n >= 10 ? color::Yellow
+			                          : n >= 2 ? color::Green : color::Gray;
+			*output << color::paint(on, style, count.str()) << " "; // space for compatibility with GNU uniq
+		}
 		*output << group.matches[row.rep];
 		if(all) {
 			for(size_t j = 0; j < group.matches.size(); j++) {
 				if(j == row.rep) continue;
-				*output << "\t" << group.matches[j];
-				if(_settings.showScores) *output << " (" << formatScore(group.scores[j]) << ")";
+				*output << "\t" << color::paint(on, color::Dim, group.matches[j]);
+				if(_settings.showScores) {
+					// Green: well inside the threshold; yellow: near its edge.
+					bool close = group.scores[j] <= _settings.maxDistance / 2.0;
+					*output << " " << color::paint(on, close ? color::Green : color::Yellow,
+					                               "(" + formatScore(group.scores[j]) + ")");
+				}
 			}
 		}
 		// Use '\n' instead of std::endl to avoid flushing the output

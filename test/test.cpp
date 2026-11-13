@@ -6,6 +6,7 @@
 #include "funiq/Settings.h"
 #include "funiq/Matcher.h"
 #include "funiq/similarity.h"
+#include "funiq/Color.h"
 
 std::string getNextLine(std::stringstream *stream) {
     std::string line;
@@ -397,4 +398,64 @@ TEST_CASE( "--best: a line joins its closest group, not the first in range", "[t
 			? std::vector<std::string>{ "      1 aaaaaa", "      2 aaabbb" }
 			: std::vector<std::string>{ "      2 aaaaaa", "      1 aaabbb" }));
 	}
+}
+
+TEST_CASE( "color::want follows --color, then FORCE_COLOR, NO_COLOR, TERM=dumb, tty", "[color]" ) {
+	// --color always/never beats every environment variable
+	REQUIRE(color::want(color::Always, "0", "1", "dumb", false));
+	REQUIRE_FALSE(color::want(color::Never, "1", nullptr, "xterm", true));
+	// auto: FORCE_COLOR comes first ("0"/"false" off, anything else on, "" unset)
+	REQUIRE(color::want(color::Auto, "1", "1", "dumb", false));
+	REQUIRE_FALSE(color::want(color::Auto, "0", nullptr, "xterm", true));
+	REQUIRE_FALSE(color::want(color::Auto, "false", nullptr, "xterm", true));
+	REQUIRE(color::want(color::Auto, "", nullptr, "xterm", true));
+	// then NO_COLOR (any non-empty value, per no-color.org)
+	REQUIRE_FALSE(color::want(color::Auto, nullptr, "1", "xterm", true));
+	REQUIRE(color::want(color::Auto, nullptr, "", "xterm", true));
+	// then TERM=dumb, then whether the stream is a terminal
+	REQUIRE_FALSE(color::want(color::Auto, nullptr, nullptr, "dumb", true));
+	REQUIRE(color::want(color::Auto, nullptr, nullptr, nullptr, true));
+	REQUIRE_FALSE(color::want(color::Auto, nullptr, nullptr, "xterm", false));
+}
+
+static std::string stripAnsi(const std::string& s) {
+	std::string out;
+	for(size_t i = 0; i < s.size(); i++) {
+		if(s[i] == '\x1b' && i + 1 < s.size() && s[i + 1] == '[') {
+			i += 2;
+			while(i < s.size() && s[i] != 'm') i++;
+			continue;
+		}
+		out += s[i];
+	}
+	return out;
+}
+
+TEST_CASE( "coloured output is exactly the plain output plus SGR codes", "[color]" ) {
+	auto render = [](bool colored) {
+		Settings settings;
+		settings.maxDistance = 2;
+		settings.showTotals = true;
+		settings.showScores = true;
+		settings.color = colored;
+		Matcher matcher(settings);
+		matcher.add("aaaaaa"); matcher.add("aaaabb");                  // count 2, scores 0 and 2
+		for(int i = 0; i < 12; i++) matcher.add("cccccc");           // count 12
+		for(int i = 0; i < 150; i++) matcher.add("dddddd");          // count 150
+		matcher.add("zzzzzz");                                       // count 1
+		std::stringstream out;
+		matcher.show(&out);
+		return out.str();
+	};
+	const std::string plain = render(false), colored = render(true);
+	REQUIRE(plain.find('\x1b') == std::string::npos);
+	REQUIRE(stripAnsi(colored) == plain);
+	// counts are coloured by frequency: 1 gray, 2-9 green, 10-99 yellow, 100+ bold red
+	REQUIRE(colored.find("\x1b[90m      1\x1b[39m zzzzzz") != std::string::npos);
+	REQUIRE(colored.find("\x1b[32m      2\x1b[39m aaaaaa") != std::string::npos);
+	REQUIRE(colored.find("\x1b[33m     12\x1b[39m cccccc") != std::string::npos);
+	REQUIRE(colored.find("\x1b[1;31m    150\x1b[22;39m dddddd") != std::string::npos);
+	// duplicates are dim; a score within half the threshold is green, else yellow
+	REQUIRE(colored.find("\t\x1b[2maaaabb\x1b[22m \x1b[33m(2)\x1b[39m") != std::string::npos);
+	REQUIRE(colored.find("\t\x1b[2mcccccc\x1b[22m \x1b[32m(0)\x1b[39m") != std::string::npos);
 }

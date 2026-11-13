@@ -141,7 +141,10 @@ Options:
   --best     Join the closest group instead of the first within range
   --rep <r>  Group representative: first (default) or longest
   --default  Shorthand for -iI -m normalized-levenshtein -d 0.125
+             (a bare -d, not followed by a number, means the same)
   -j <n>     Worker threads (default: all CPU cores; output is identical)
+  --color <when>  auto (default: when output is a terminal), always, never;
+             NO_COLOR and FORCE_COLOR are honoured
   -h         Show this help
   --version  Show version
 
