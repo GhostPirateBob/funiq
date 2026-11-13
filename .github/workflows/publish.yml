@@ -89,7 +89,7 @@ jobs:
         run: |
           name="funiq-${VERSION}-${{ matrix.platform }}"
           mkdir -p "dist/$name"
-          cp README.md CHANGELOG.md "dist/$name/"
+          cp README.md CHANGELOG.md LICENSE THIRD_PARTY_NOTICES.md "dist/$name/"
           if [ -f bin/funiq.exe ]; then
             cp bin/funiq.exe "dist/$name/"
             (cd dist && 7z a -tzip "$name.zip" "$name" >/dev/null)
