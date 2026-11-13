@@ -1,5 +1,5 @@
-#ifndef _FUNIQ_SETTINGS_
-#define _FUNIQ_SETTINGS_
+#ifndef FUNIQ_SETTINGS_H
+#define FUNIQ_SETTINGS_H
 
 // Levenshtein: absolute edit distance. NormalizedLevenshtein: edits / longer
 // length. TokenSort: NormalizedLevenshtein on whitespace tokens sorted
@@ -11,36 +11,24 @@ enum ComparisonMethod { Levenshtein, NormalizedLevenshtein, TokenSort, Cosine };
 // that matching compares against), or the longest member.
 enum Representative { RepFirst, RepLongest };
 
-struct Settings
-{
-	Settings() :
-		maxDistance(3),
-		caseInsensitive(false),
-        comparisonMethod(Levenshtein),
-		showAllMatches(false),
-		showTotals(false),
-		ignoreNonAlphaNumeric(false),
-		threads(1),
-		maskDigits(false),
-		representative(RepFirst),
-		showScores(false),
-		bestMatch(false),
-		color(false)
-		{}
+// Everything that shapes matching and output, filled in from the command
+// line by funiq.cpp. The defaults are those of a plain `funiq` run.
+struct Settings {
+	// matching
+	ComparisonMethod comparisonMethod = Levenshtein;
+	float maxDistance = 3;               // threshold, in the method's units
+	bool caseInsensitive = false;        // -i
+	bool ignoreNonAlphaNumeric = false;  // -I
+	bool maskDigits = false;             // -D: each run of digits compares as a single '0'
+	bool bestMatch = false;              // --best: closest group instead of the first in range
+	unsigned threads = 1;                // -j; results never depend on it
 
-	float maxDistance;
-	bool caseInsensitive;
-	ComparisonMethod comparisonMethod;
-	bool showAllMatches;
-	bool showTotals;
-	bool ignoreNonAlphaNumeric;
-	unsigned threads; // worker threads for matching; results never depend on it
-	bool maskDigits;  // each run of digits compares as a single '0'
-	Representative representative;
-	bool showScores;  // print each duplicate's distance from its group key (implies -a)
-	bool bestMatch;   // join the closest group instead of the first one in range
-	bool color;       // colour stdout (decided once, see color::want)
-	int totalsFieldWidth;
+	// output
+	bool showTotals = false;             // -c
+	bool showAllMatches = false;         // -a
+	bool showScores = false;             // --scores (implies -a)
+	Representative representative = RepFirst;  // --rep
+	bool color = false;                  // colour stdout (decided once, see color::want)
 };
 
 #endif

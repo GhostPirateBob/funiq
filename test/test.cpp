@@ -1,4 +1,4 @@
-#define CATCH_CONFIG_MAIN  // This tells Catch to provide a main() - only do this in one cpp file
+#define CATCH_CONFIG_MAIN
 #include <iostream>
 #include <random>
 
@@ -8,130 +8,70 @@
 #include "funiq/similarity.h"
 #include "funiq/Color.h"
 
-std::string getNextLine(std::stringstream *stream) {
-    std::string line;
-    std::getline(*stream, line);
-    return line;
-}
-
-TEST_CASE( "First README example is correct", "[matcher]" ) {
-    Settings settings;
-    settings.caseInsensitive = true;
-    settings.ignoreNonAlphaNumeric = true;
-
-    Matcher matcher(settings);
-
-    matcher.add("The Fellowship of The Ring");
-    matcher.add("the fellowship ofteh reing");
-    matcher.add("The Flopship of the Rung");
-    matcher.add("Felloship of the Ring");
-    matcher.add("The Two Towers");
-    matcher.add("The Twin Towers");
-    matcher.add("the towers");
-    matcher.add("The Return of the King");
-    matcher.add("Return of the King");
-    matcher.add("Teh return of theking");
-
-    std::stringstream output;
-    matcher.show(&output);
-
-    REQUIRE(getNextLine(&output) == "Felloship of the Ring");
-    REQUIRE(getNextLine(&output) == "The Fellowship of The Ring");
-    REQUIRE(getNextLine(&output) == "The Flopship of the Rung");
-    REQUIRE(getNextLine(&output) == "The Return of the King");
-    REQUIRE(getNextLine(&output) == "The Two Towers");
-    REQUIRE(getNextLine(&output) == "");
-}
-
-TEST_CASE( "Second README example is correct", "[matcher]" ) {
-    Settings settings;
-    settings.caseInsensitive = true;
-    settings.ignoreNonAlphaNumeric = true;
-    settings.maxDistance = 4;
-
-    Matcher matcher(settings);
-
-    matcher.add("The Fellowship of The Ring");
-    matcher.add("the fellowship ofteh reing");
-    matcher.add("The Flopship of the Rung");
-    matcher.add("Felloship of the Ring");
-    matcher.add("The Two Towers");
-    matcher.add("The Twin Towers");
-    matcher.add("the towers");
-    matcher.add("The Return of the King");
-    matcher.add("Return of the King");
-    matcher.add("Teh return of theking");
-
-    std::stringstream output;
-    matcher.show(&output);
-
-    REQUIRE(getNextLine(&output) == "The Fellowship of The Ring");
-    REQUIRE(getNextLine(&output) == "The Return of the King");
-    REQUIRE(getNextLine(&output) == "The Two Towers");
-    REQUIRE(getNextLine(&output) == "");
-}
-
-TEST_CASE( "Normalised Levenshtein setting for short strings", "[matcher]" ) {
-    Settings settings;
-    settings.comparisonMethod = NormalizedLevenshtein;
-
-	// _foo -> _ normalized distance is 0.75
-	// _foo -> _moo normalized distance is 0.25
-    settings.maxDistance = 0.26;
-
-    Matcher matcher(settings);
-
-    matcher.add("_");
-    matcher.add("_foo");
-    matcher.add("_moo");
-
-    std::stringstream output;
-    matcher.show(&output);
-
-    REQUIRE(getNextLine(&output) == "_");
-    REQUIRE(getNextLine(&output) == "_foo");
-    REQUIRE(getNextLine(&output) == "");
-}
-
-TEST_CASE( "Normalised Levenshtein setting for short and long strings", "[matcher]" ) {
-	Settings settings;
-	settings.comparisonMethod = NormalizedLevenshtein;
-	settings.maxDistance = 0.35;
-
-	Matcher matcher(settings);
-
-	// One character difference
-	matcher.add("rat");
-	matcher.add("cat");
-
-	// Two character difference
-	matcher.add("elephant");
-	matcher.add("elephenty");
-
-	// All different
-	matcher.add("monkey");
-
+// show() output as one string per line.
+static std::vector<std::string> showLines(Matcher& matcher) {
 	std::stringstream output;
 	matcher.show(&output);
-
-	REQUIRE(getNextLine(&output) == "elephant");
-	REQUIRE(getNextLine(&output) == "monkey");
-	REQUIRE(getNextLine(&output) == "rat");
-	REQUIRE(getNextLine(&output) == "");
+	std::vector<std::string> out;
+	for(std::string line; std::getline(output, line); ) out.push_back(line);
+	return out;
 }
 
-TEST_CASE( "similarity::levenshteinDistance returns correct values", "[levenshtein]" ) {
-	REQUIRE(similarity::levenshteinDistance("cat", "rat") == 1);
-	REQUIRE(similarity::levenshteinDistance("hello", "helo") == 1);
-	REQUIRE(similarity::levenshteinDistance("think", "thinky") == 1);
-	REQUIRE(similarity::levenshteinDistance("hair", "head") == 3);
+// The full (n+1) x (m+1) table, kept as plain as possible: an independent
+// reference for the optimised implementations in similarity.h.
+static unsigned int referenceLevenshtein(const std::string& a, const std::string& b) {
+	std::vector<std::vector<unsigned int>> d(a.size() + 1, std::vector<unsigned int>(b.size() + 1));
+	for(size_t i = 0; i <= a.size(); i++) d[i][0] = i;
+	for(size_t j = 0; j <= b.size(); j++) d[0][j] = j;
+	for(size_t i = 1; i <= a.size(); i++)
+		for(size_t j = 1; j <= b.size(); j++)
+			d[i][j] = std::min({ d[i - 1][j] + 1, d[i][j - 1] + 1,
+			                     d[i - 1][j - 1] + (a[i - 1] == b[j - 1] ? 0u : 1u) });
+	return d[a.size()][b.size()];
 }
 
-TEST_CASE( "similarity::normalizedLevenshtein returns correct values", "[levenshtein]" ) {
-	REQUIRE(similarity::normalizedLevenshtein("fear", "wear") == 0.25);
-	REQUIRE(similarity::normalizedLevenshtein("here", "hear") == 0.5);
-	REQUIRE(similarity::normalizedLevenshtein("not", "yes") == 1);
-	REQUIRE(similarity::normalizedLevenshtein("same", "same") == 0);
+static const char* const SHIPS[] = {
+	"USS Enterprise", "uss enterprize", "U.S.S. Enterprise", "Enterprize",
+	"USS Voyager", "USS Voyagr", "uss-voyager",
+	"USS Defiant", "USS Defient", "Defiant" };
+
+TEST_CASE( "README example: -iI groups the misspelt ships, -d 4 also catches Enterprize", "[matcher]" ) {
+	for(float d : {3.0f, 4.0f}) {
+		Settings settings;
+		settings.caseInsensitive = true;
+		settings.ignoreNonAlphaNumeric = true;
+		settings.maxDistance = d;
+		Matcher matcher(settings);
+		for(const char* ship : SHIPS) matcher.add(ship);
+		INFO("d=" << d);
+		// "Enterprize" is 4 edits from "ussenterprise" once case and punctuation go
+		REQUIRE(showLines(matcher) == (d < 4
+			? std::vector<std::string>{ "Enterprize", "USS Defiant", "USS Enterprise", "USS Voyager" }
+			: std::vector<std::string>{ "USS Defiant", "USS Enterprise", "USS Voyager" }));
+	}
+}
+
+TEST_CASE( "normalized threshold scales with length", "[matcher]" ) {
+	Settings settings;
+	settings.comparisonMethod = NormalizedLevenshtein;
+	settings.maxDistance = 0.25f;
+	settings.showTotals = true;
+	Matcher matcher(settings);
+	matcher.add("ab");     // "ac" is 1 edit in 2 chars (0.5): too far
+	matcher.add("ac");
+	matcher.add("abcd");   // "abce" is 1 edit in 4 chars (0.25): close enough
+	matcher.add("abce");
+	REQUIRE(showLines(matcher) == std::vector<std::string>{ "      1 ab", "      2 abcd", "      1 ac" });
+}
+
+TEST_CASE( "similarity::levenshteinDistance and normalizedLevenshtein values", "[levenshtein]" ) {
+	REQUIRE(similarity::levenshteinDistance("kitten", "sitting") == 3);
+	REQUIRE(similarity::levenshteinDistance("flaw", "lawn") == 2);
+	REQUIRE(similarity::levenshteinDistance("", "abc") == 3);
+	REQUIRE(similarity::levenshteinDistance("same", "same") == 0);
+	REQUIRE(similarity::normalizedLevenshtein("abcd", "abce") == 0.25f);
+	REQUIRE(similarity::normalizedLevenshtein("ab", "ba") == 1.0f);
+	REQUIRE(similarity::normalizedLevenshtein("", "") == 0.0f);
 }
 
 TEST_CASE( "similarity::boundedLevenshtein is exact up to k, else k+1", "[levenshtein]" ) {
@@ -144,7 +84,7 @@ TEST_CASE( "similarity::boundedLevenshtein is exact up to k, else k+1", "[levens
 	REQUIRE(similarity::boundedLevenshtein("prefix-x-suffix", "prefix-yy-suffix", 2) == 2);
 }
 
-TEST_CASE( "similarity::boundedLevenshtein agrees with the full DP", "[levenshtein]" ) {
+TEST_CASE( "levenshteinDistance and boundedLevenshtein agree with the reference table", "[levenshtein]" ) {
 	// Small alphabet => lots of shared prefixes/suffixes and near-misses,
 	// which exercises the affix strip, the band edges and the early abort.
 	std::mt19937 rng(20261113);
@@ -156,9 +96,10 @@ TEST_CASE( "similarity::boundedLevenshtein agrees with the full DP", "[levenshte
 	for(int iter = 0; iter < 20000; iter++) {
 		std::string a = randomString(), b = randomString();
 		unsigned int k = rng() % 13;
-		unsigned int full = similarity::levenshteinDistance(a, b);
+		unsigned int full = referenceLevenshtein(a, b);
 		unsigned int want = full <= k ? full : k + 1;
 		INFO("a=\"" << a << "\" b=\"" << b << "\" k=" << k);
+		REQUIRE(similarity::levenshteinDistance(a, b) == full);
 		REQUIRE(similarity::boundedLevenshtein(a, b, k) == want);
 	}
 }
@@ -174,13 +115,7 @@ TEST_CASE( "a repeated line joins the same group as its first occurrence", "[mat
 	matcher.add("aaab");
 	matcher.add("zzzz");
 	matcher.add("aaab");
-
-	std::stringstream output;
-	matcher.show(&output);
-
-	REQUIRE(getNextLine(&output) == "aaaa\taaab\taaab");
-	REQUIRE(getNextLine(&output) == "zzzz\tzzzz");
-	REQUIRE(getNextLine(&output) == "");
+	REQUIRE(showLines(matcher) == std::vector<std::string>{ "aaaa\taaab\taaab", "zzzz\tzzzz" });
 }
 
 TEST_CASE( "show-all prints duplicates as originally written, not normalized", "[matcher]" ) {
@@ -192,12 +127,7 @@ TEST_CASE( "show-all prints duplicates as originally written, not normalized", "
 	Matcher matcher(settings);
 	matcher.add("Hello, World!");
 	matcher.add("HELLO WORLD");
-
-	std::stringstream output;
-	matcher.show(&output);
-
-	REQUIRE(getNextLine(&output) == "Hello, World!\tHELLO WORLD");
-	REQUIRE(getNextLine(&output) == "");
+	REQUIRE(showLines(matcher) == std::vector<std::string>{ "Hello, World!\tHELLO WORLD" });
 }
 
 TEST_CASE( "a line joins only the first group it matches", "[matcher]" ) {
@@ -209,14 +139,8 @@ TEST_CASE( "a line joins only the first group it matches", "[matcher]" ) {
 	matcher.add("aa");
 	matcher.add("bb");
 	matcher.add("ab"); // distance 1 from both "aa" and "bb"
-
-	std::stringstream output;
-	matcher.show(&output);
-
 	// Counts must sum to the number of input lines (3), not 4
-	REQUIRE(getNextLine(&output) == "      2 aa");
-	REQUIRE(getNextLine(&output) == "      1 bb");
-	REQUIRE(getNextLine(&output) == "");
+	REQUIRE(showLines(matcher) == std::vector<std::string>{ "      2 aa", "      1 bb" });
 }
 
 static std::string runMatcher(Settings settings, const std::vector<std::string>& lines,
@@ -276,14 +200,6 @@ TEST_CASE( "addBatch with threads gives the same groups as serial add", "[matche
 			REQUIRE(runMatcher(settings, lines, threads, &rng) == serial);
 		}
 	}
-}
-
-static std::vector<std::string> showLines(Matcher& matcher) {
-	std::stringstream output;
-	matcher.show(&output);
-	std::vector<std::string> out;
-	for(std::string line; std::getline(output, line); ) out.push_back(line);
-	return out;
 }
 
 TEST_CASE( "--mask-digits: lines differing only in numbers become duplicates", "[tier3]" ) {
