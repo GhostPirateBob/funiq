@@ -131,3 +131,39 @@ TEST_CASE( "similarity::normalizedLevenshtein returns correct values", "[levensh
 	REQUIRE(similarity::normalizedLevenshtein("not", "yes") == 1);
 	REQUIRE(similarity::normalizedLevenshtein("same", "same") == 0);
 }
+
+TEST_CASE( "show-all prints duplicates as originally written, not normalized", "[matcher]" ) {
+	Settings settings;
+	settings.caseInsensitive = true;
+	settings.ignoreNonAlphaNumeric = true;
+	settings.showAllMatches = true;
+
+	Matcher matcher(settings);
+	matcher.add("Hello, World!");
+	matcher.add("HELLO WORLD");
+
+	std::stringstream output;
+	matcher.show(&output);
+
+	REQUIRE(getNextLine(&output) == "Hello, World!\tHELLO WORLD");
+	REQUIRE(getNextLine(&output) == "");
+}
+
+TEST_CASE( "a line joins only the first group it matches", "[matcher]" ) {
+	Settings settings;
+	settings.maxDistance = 1;
+	settings.showTotals = true;
+
+	Matcher matcher(settings);
+	matcher.add("aa");
+	matcher.add("bb");
+	matcher.add("ab"); // distance 1 from both "aa" and "bb"
+
+	std::stringstream output;
+	matcher.show(&output);
+
+	// Counts must sum to the number of input lines (3), not 4
+	REQUIRE(getNextLine(&output) == "      2 aa");
+	REQUIRE(getNextLine(&output) == "      1 bb");
+	REQUIRE(getNextLine(&output) == "");
+}

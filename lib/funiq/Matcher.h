@@ -59,12 +59,13 @@ void Matcher::add(std::string line) {
 	std::string normalizedLine = normalize(line);
 
 	// Compare against each group's cached normalized key to avoid
-	// re-normalizing existing keys on every insertion.
+	// re-normalizing existing keys on every insertion. A line joins only
+	// the first group it matches, so counts sum to the number of lines.
 	for(auto& group : groups) {
 		if(isMatch(normalizedLine, group.normalizedKey)) {
 			matchFound = true;
-			group.matches.push_back(normalizedLine);
-			continue;
+			group.matches.push_back(line);
+			break;
 		}
 	}
 

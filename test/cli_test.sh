@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# CLI-level regression tests: behaviour that only shows up when running the
+# real binary (exit codes, raw stdout bytes, argument defaults, tty paths).
+# Usage: test/cli_test.sh path/to/funiq
+set -u
+
+FUNIQ=${1:?usage: $0 path/to/funiq}
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+
+pass=0
+fail=0
+skip=0
+ok() { pass=$((pass + 1)); echo "PASS  $1"; }
+ko() { fail=$((fail + 1)); echo "FAIL  $1"; [ -n "${2:-}" ] && echo "      $2"; }
+sk() { skip=$((skip + 1)); echo "SKIP  $1 ($2)"; }
+
+LOTR="$TMP/lotr.txt"
+printf '%s\n' 'The Fellowship of The Ring' 'the fellowship ofteh reing' \
+	'The Flopship of the Rung' 'Felloship of the Ring' 'The Two Towers' \
+	'The Twin Towers' 'the towers' 'The Return of the King' \
+	'Return of the King' 'Teh return of theking' > "$LOTR"
+
+# --- missing input file is an error, not silent empty output ---------------
+name="missing file exits non-zero with a message"
+err=$("$FUNIQ" "$TMP/does-not-exist.txt" 2>&1 >/dev/null)
+rc=$?
+if [ $rc -ne 0 ] && printf '%s' "$err" | grep -q 'does-not-exist.txt'; then
+	ok "$name"
+else
+	ko "$name" "rc=$rc stderr='$err'"
+fi
+
+# --- stdout uses LF line endings on every platform --------------------------
+name="output has no CR bytes"
+if printf 'alpha\nzzzzzzzz\n' | "$FUNIQ" | od -c | grep -q '\\r'; then
+	ko "$name" "found \\r in output"
+else
+	ok "$name"
+fi
+
+# --- normalized method gets a sane default threshold ------------------------
+# Without -d, the old default of 3 made every normalized comparison match.
+name="-m normalized-levenshtein without -d does not collapse distinct lines"
+n=$(printf '%s\n' cat elephant monkey xyzzy | "$FUNIQ" -m normalized-levenshtein | wc -l)
+if [ "$n" -eq 4 ]; then ok "$name"; else ko "$name" "got $n lines, want 4"; fi
+
+# --- README examples stay true ----------------------------------------------
+name="README -a example"
+want=$(printf '%s\t%s\t%s\t%s\n%s\t%s\t%s\n%s\t%s\t%s\n' \
+	'The Fellowship of The Ring' 'the fellowship ofteh reing' 'The Flopship of the Rung' 'Felloship of the Ring' \
+	'The Return of the King' 'Return of the King' 'Teh return of theking' \
+	'The Two Towers' 'The Twin Towers' 'the towers')
+got=$("$FUNIQ" -iI -d 4 -a "$LOTR")
+if [ "$got" = "$want" ]; then ok "$name"; else ko "$name" "got: $(printf '%s' "$got" | od -c | head -3)"; fi
+
+name="README -c example"
+want=$(printf '%s\n' '      4 The Fellowship of The Ring' '      3 The Return of the King' '      3 The Two Towers')
+got=$("$FUNIQ" -iI -d 4 -c "$LOTR")
+if [ "$got" = "$want" ]; then ok "$name"; else ko "$name" "got: $got"; fi
+
+# --- non-seekable file argument with progress bar active --------------------
+# Progress (stderr is a tty) pre-counts lines then rewinds; a FIFO can't rewind.
+name="FIFO filename with tty stderr keeps all lines"
+if ! command -v script >/dev/null 2>&1 || [ "${OS:-}" = "Windows_NT" ]; then
+	sk "$name" "needs util-linux script(1) on a POSIX host"
+else
+	seq 1 120 | sed 's/^/line unique-/' | awk '{print $0 "-" NR*7919}' > "$TMP/in.txt"
+	n=$(script -qec "'$FUNIQ' -d 0 <(cat '$TMP/in.txt') 2>/dev/tty | wc -l" /dev/null | tr -d '\r' | tail -1)
+	if [ "$n" = "120" ]; then ok "$name"; else ko "$name" "got '$n' lines, want 120"; fi
+fi
+
+echo "cli: $pass passed, $fail failed, $skip skipped"
+[ $fail -eq 0 ]

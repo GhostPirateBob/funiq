@@ -1,8 +1,17 @@
 CXX=g++
 CXXFLAGS=-Wall -g -std=c++11
 OPT_FLAG=-O2
-OUT=bin/funiq
-OUT_TEST=bin/funiq_test
+
+# Windows (MinGW): fully static so the .exe runs without libstdc++-6.dll,
+# libgcc_s_seh-1.dll or libwinpthread-1.dll (-static-libstdc++ alone still
+# leaves winpthread as a dependency on posix-thread toolchains).
+ifeq ($(OS),Windows_NT)
+  EXE=.exe
+  LDFLAGS+=-static
+endif
+OUT=bin/funiq$(EXE)
+OUT_TEST=bin/funiq_test$(EXE)
+HEADERS=$(wildcard lib/funiq/*.h)
 
 # Use DESTDIR and PREFIX for flexible install paths.
 # If PREFIX is not set, try ~/.local/bin first (no sudo needed), then
@@ -29,18 +38,19 @@ bin:
 
 build_test: $(OUT_TEST)
 
-$(OUT_TEST):
-	$(CXX) $(CXXFLAGS) -Ilib test/test.cpp -o $(OUT_TEST)
+$(OUT_TEST): test/test.cpp $(HEADERS)
+	$(CXX) $(CXXFLAGS) -Ilib test/test.cpp -o $(OUT_TEST) $(LDFLAGS)
 
 # Build the binary first, then run tests independently so a test failure
 # does not prevent the binary from being produced.
-test: build_test
+test: build_test build
 	$(OUT_TEST)
+	bash test/cli_test.sh $(OUT)
 
 build: $(OUT)
 
-$(OUT):
-	$(CXX) $(CXXFLAGS) $(OPT_FLAG) -Ilib src/funiq.cpp -o $(OUT)
+$(OUT): src/funiq.cpp $(HEADERS)
+	$(CXX) $(CXXFLAGS) $(OPT_FLAG) -Ilib src/funiq.cpp -o $(OUT) $(LDFLAGS)
 
 # Install the compiled binary to the system path.
 # Hint the user to use sudo if the install fails due to permissions.
