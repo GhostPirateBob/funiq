@@ -34,6 +34,11 @@ Release notes for funiq, newest first. Versions follow [Semantic Versioning](htt
 ### Docs
 - README rewritten; build, test and install details moved to BUILDING.md; new ARCHITECTURE.md,
   TODO.md and WIKI.md
+- README Performance section: measured against the original mjfisheruk/funiq on 6,000 synthetic
+  log lines with identical output: 53–1,259× single-threaded and 180–3,537× on all cores
+  (Linux arm64), 57–864× and 189–1,932× (Windows x86_64)
+- `test/fixtures/gen_synthetic.py OUT N` generates benchmark input of any size (the default still
+  reproduces the committed fixture)
 
 ### Licence
 - funiq is now MIT-licensed (LICENSE). TCLAP's MIT licence (`lib/tclap/COPYING`, missing from
