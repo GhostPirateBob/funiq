@@ -35,6 +35,11 @@ Release notes for funiq, newest first. Versions follow [Semantic Versioning](htt
 - README rewritten; build, test and install details moved to BUILDING.md; new ARCHITECTURE.md,
   TODO.md and WIKI.md
 
+### Licence
+- funiq is now MIT-licensed (LICENSE). TCLAP's MIT licence (`lib/tclap/COPYING`, missing from
+  the vendored copy until now) and Catch2's BSL-1.0 are included; release archives ship LICENSE
+  and THIRD_PARTY_NOTICES.md
+
 ## [1.1.0] - 2026-11-13
 
 ### Added

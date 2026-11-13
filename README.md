@@ -145,3 +145,7 @@ Examples:
 - [CHANGELOG.md](CHANGELOG.md): release notes
 - [TODO.md](TODO.md): ideas and possible next steps
 - [WIKI.md](WIKI.md): outline for a project wiki
+
+## License
+
+MIT, see [LICENSE](LICENSE). This applies to the code from v1.2.0 on; earlier commits in the history include code from earlier versions of funiq that was published without a licence. The bundled TCLAP argument parser is MIT and Catch2 (tests only) is BSL-1.0; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

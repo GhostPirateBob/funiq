@@ -6,7 +6,6 @@ Ideas collected while building 1.x, roughly by value. Nothing here is committed 
 
 - **Tune the cosine default** (0.05) on real logs. At 0.2 it merged different request paths on access logs because shared User-Agent strings dominate the trigram vector.
 - **Decide whether `-D` belongs in `--default`.** It is the biggest quality and speed lever for logs, but changes `--default` output, and 0.125 was tuned without it.
-- **Add a LICENSE before the first release**, and ship the third-party notices in the release archives: TCLAP (compiled into the binary) is MIT, Catch2 (tests only) is BSL-1.0.
 - **Delete merged branches** on GitHub.
 
 ## Nice to have
