@@ -1,9 +1,12 @@
 #include <algorithm>
 #include <functional>
 #include <cctype>
+#include <cerrno>
 #include <chrono>
 #include <csignal>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -11,6 +14,7 @@
 #include <string>
 
 #ifdef _WIN32
+#include <fcntl.h>
 #include <io.h>
 #define isatty _isatty
 #define STDERR_FD 2
@@ -38,7 +42,7 @@ public:
 			<< "Usage: funiq [options] [filename]\n"
 			<< "\n"
 			<< "Options:\n"
-			<< "  -d <n>     Max distance threshold (default: 3)\n"
+			<< "  -d <n>     Max distance threshold (default: 3, or 0.125 when normalized)\n"
 			<< "  -m <name>  Comparison method: levenshtein (default), normalized-levenshtein\n"
 			<< "  -i         Case-insensitive matching\n"
 			<< "  -I         Ignore non-alphanumeric characters\n"
@@ -88,7 +92,7 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 		false, "", "filename");
 	TCLAP::ValueArg<float> distanceArg(
 		"d","distance",
-		"Max distance threshold (default: 3)",
+		"Max distance threshold (default: 3, or 0.125 when normalized)",
 		false, 3, "number");
 	TCLAP::SwitchArg caseSwitch(
 		"i","case-insensitive",
@@ -139,12 +143,15 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 	// Explicit flags override --default
 	if(caseSwitch.isSet()) settings.caseInsensitive = caseSwitch.getValue();
 	if(ignoreNonAlphaNumericSwitch.isSet()) settings.ignoreNonAlphaNumeric = ignoreNonAlphaNumericSwitch.getValue();
-	if(distanceArg.isSet()) settings.maxDistance = distanceArg.getValue();
 	if(comparisonMethodArg.isSet()) {
 		std::string comparisonMethod = comparisonMethodArg.getValue();
 		if(comparisonMethod == "levenshtein") settings.comparisonMethod = Levenshtein;
 		if(comparisonMethod == "normalized-levenshtein") settings.comparisonMethod = NormalizedLevenshtein;
 	}
+	// The default threshold depends on the method: 3 edits is meaningless
+	// as a 0.0-1.0 ratio (everything would match), so use 0.125 there.
+	if(distanceArg.isSet()) settings.maxDistance = distanceArg.getValue();
+	else settings.maxDistance = (settings.comparisonMethod == NormalizedLevenshtein) ? 0.125 : 3;
 
 	settings.showAllMatches = showAllSwitch.getValue();
 	settings.showTotals = showTotalsSwitch.getValue();
@@ -164,6 +171,10 @@ int main(int argc, char* argv[]) {
 	// of printing an error or crashing.
 #ifndef _WIN32
 	std::signal(SIGPIPE, SIG_DFL);
+#else
+	// Text-mode stdout turns every '\n' into "\r\n" on Windows, which leaks
+	// a stray \r into downstream sed/awk/bat pipelines. Emit LF like uniq.
+	_setmode(_fileno(stdout), _O_BINARY);
 #endif
 
 	// Disable C/C++ I/O synchronization for faster stdin/stdout throughput
@@ -182,6 +193,10 @@ int main(int argc, char* argv[]) {
 		std::ifstream fileStream;
 		if(!filename.empty()) {
 			fileStream = getFileInput(filename);
+			if(!fileStream) {
+				std::cerr << "funiq: " << filename << ": " << std::strerror(errno) << "\n";
+				return 1;
+			}
 		}
 		std::istream& inputStream = filename.empty() ? std::cin : fileStream;
 
@@ -194,7 +209,9 @@ int main(int argc, char* argv[]) {
 
 		// For file input, count total lines first so we can show a
 		// percentage progress bar. Seek back to the start afterwards.
-		if(showProgress && !filename.empty()) {
+		// Only for seekable files: a FIFO/pipe (e.g. funiq <(zcat x.gz))
+		// can't rewind, so pre-counting would consume the whole input.
+		if(showProgress && !filename.empty() && fileStream.tellg() != std::streampos(-1)) {
 			std::string tmp;
 			while(getline(inputStream, tmp)) totalLines++;
 			fileStream.clear();

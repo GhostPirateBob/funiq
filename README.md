@@ -47,7 +47,7 @@ A good general-purpose preset for catching typos and near-duplicates:
 
 	$ funiq -iI -m normalized-levenshtein -d 0.125 names.txt
 
-This treats strings as duplicates when they differ by roughly 12.5% or less of their length, which works well for both short and long strings.
+This treats strings as duplicates when they differ by roughly 12.5% or less of their length, which works well for both short and long strings. 0.125 is also the default threshold for the normalized method when `-d` is omitted (the absolute method defaults to 3 edits).
 
 ## Piping from stdin
 
@@ -63,9 +63,9 @@ Funiq reads from stdin when no filename is given, so it works naturally in pipel
 
 Use `-c` to prefix each line with the number of matches found, similar to `uniq -c`:
 
-	$ funiq -iI -c test.txt
+	$ funiq -iI -d 4 -c test.txt
 
-	      4 Felloship of the Ring
+	      4 The Fellowship of The Ring
 	      3 The Return of the King
 	      3 The Two Towers
 

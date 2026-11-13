@@ -46,13 +46,18 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           if (!(Test-Path bin)) { mkdir bin }
-          g++ -Wall -g -std=c++11 -O2 -Ilib src/funiq.cpp -o bin/funiq.exe
+          g++ -Wall -g -std=c++11 -O2 -Ilib src/funiq.cpp -o bin/funiq.exe -static
 
       - name: test (Windows)
         if: runner.os == 'Windows'
         run: |
-          g++ -Wall -g -std=c++11 -Ilib test/test.cpp -o bin/funiq_test.exe
+          g++ -Wall -g -std=c++11 -Ilib test/test.cpp -o bin/funiq_test.exe -static
           bin/funiq_test.exe
+
+      - name: cli test (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: bash test/cli_test.sh bin/funiq.exe
 
       - name: upload artifact (Windows)
         if: runner.os == 'Windows'

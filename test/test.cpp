@@ -1,5 +1,6 @@
 #define CATCH_CONFIG_MAIN  // This tells Catch to provide a main() - only do this in one cpp file
 #include <iostream>
+#include <random>
 
 #include "catch/catch.hpp"
 #include "funiq/Settings.h"
@@ -130,4 +131,89 @@ TEST_CASE( "similarity::normalizedLevenshtein returns correct values", "[levensh
 	REQUIRE(similarity::normalizedLevenshtein("here", "hear") == 0.5);
 	REQUIRE(similarity::normalizedLevenshtein("not", "yes") == 1);
 	REQUIRE(similarity::normalizedLevenshtein("same", "same") == 0);
+}
+
+TEST_CASE( "similarity::boundedLevenshtein is exact up to k, else k+1", "[levenshtein]" ) {
+	REQUIRE(similarity::boundedLevenshtein("kitten", "sitting", 3) == 3);
+	REQUIRE(similarity::boundedLevenshtein("kitten", "sitting", 2) == 3); // over cutoff -> k+1
+	REQUIRE(similarity::boundedLevenshtein("", "abc", 5) == 3);
+	REQUIRE(similarity::boundedLevenshtein("abc", "", 1) == 2);          // length bound -> k+1
+	REQUIRE(similarity::boundedLevenshtein("same", "same", 0) == 0);
+	REQUIRE(similarity::boundedLevenshtein("ab", "ba", 0) == 1);
+	REQUIRE(similarity::boundedLevenshtein("prefix-x-suffix", "prefix-yy-suffix", 2) == 2);
+}
+
+TEST_CASE( "similarity::boundedLevenshtein agrees with the full DP", "[levenshtein]" ) {
+	// Small alphabet => lots of shared prefixes/suffixes and near-misses,
+	// which exercises the affix strip, the band edges and the early abort.
+	std::mt19937 rng(20261113);
+	auto randomString = [&rng]() {
+		std::string s(rng() % 25, 'a');
+		for(auto& c : s) c = "abc"[rng() % 3];
+		return s;
+	};
+	for(int iter = 0; iter < 20000; iter++) {
+		std::string a = randomString(), b = randomString();
+		unsigned int k = rng() % 13;
+		unsigned int full = similarity::levenshteinDistance(a, b);
+		unsigned int want = full <= k ? full : k + 1;
+		INFO("a=\"" << a << "\" b=\"" << b << "\" k=" << k);
+		REQUIRE(similarity::boundedLevenshtein(a, b, k) == want);
+	}
+}
+
+TEST_CASE( "a repeated line joins the same group as its first occurrence", "[matcher]" ) {
+	Settings settings;
+	settings.maxDistance = 1;
+	settings.showAllMatches = true;
+
+	Matcher matcher(settings);
+	matcher.add("aaaa");
+	matcher.add("zzzz");
+	matcher.add("aaab");
+	matcher.add("zzzz");
+	matcher.add("aaab");
+
+	std::stringstream output;
+	matcher.show(&output);
+
+	REQUIRE(getNextLine(&output) == "aaaa\taaab\taaab");
+	REQUIRE(getNextLine(&output) == "zzzz\tzzzz");
+	REQUIRE(getNextLine(&output) == "");
+}
+
+TEST_CASE( "show-all prints duplicates as originally written, not normalized", "[matcher]" ) {
+	Settings settings;
+	settings.caseInsensitive = true;
+	settings.ignoreNonAlphaNumeric = true;
+	settings.showAllMatches = true;
+
+	Matcher matcher(settings);
+	matcher.add("Hello, World!");
+	matcher.add("HELLO WORLD");
+
+	std::stringstream output;
+	matcher.show(&output);
+
+	REQUIRE(getNextLine(&output) == "Hello, World!\tHELLO WORLD");
+	REQUIRE(getNextLine(&output) == "");
+}
+
+TEST_CASE( "a line joins only the first group it matches", "[matcher]" ) {
+	Settings settings;
+	settings.maxDistance = 1;
+	settings.showTotals = true;
+
+	Matcher matcher(settings);
+	matcher.add("aa");
+	matcher.add("bb");
+	matcher.add("ab"); // distance 1 from both "aa" and "bb"
+
+	std::stringstream output;
+	matcher.show(&output);
+
+	// Counts must sum to the number of input lines (3), not 4
+	REQUIRE(getNextLine(&output) == "      2 aa");
+	REQUIRE(getNextLine(&output) == "      1 bb");
+	REQUIRE(getNextLine(&output) == "");
 }

@@ -8,6 +8,7 @@
 #include <functional>
 #include <cctype>
 #include <map>
+#include <unordered_map>
 #include <vector>
 
 #include "Settings.h"
@@ -33,6 +34,10 @@ public:
 private:
 	Settings& _settings;
 	std::vector<MatchGroup> groups;
+	// normalized line -> index of the group it joined. Safe under greedy
+	// first-match: groups created later have higher indices, so a repeat
+	// line's first match can never change.
+	std::unordered_map<std::string, size_t> groupOf;
 	std::string normalize(const std::string& s);
 	bool isMatch(const std::string& s1, const std::string& s2);
 };
@@ -55,20 +60,33 @@ std::string Matcher::normalize(const std::string& s) {
 }
 
 void Matcher::add(std::string line) {
-	bool matchFound = false;
 	std::string normalizedLine = normalize(line);
+	size_t g = groups.size(); // "no group yet"
 
-	// Compare against each group's cached normalized key to avoid
-	// re-normalizing existing keys on every insertion.
-	for(auto& group : groups) {
-		if(isMatch(normalizedLine, group.normalizedKey)) {
-			matchFound = true;
-			group.matches.push_back(normalizedLine);
-			continue;
-		}
+	// A negative (or NaN) threshold matches nothing, not even an identical
+	// line, so repeats must not be memoised into one group there.
+	bool useMemo = _settings.maxDistance >= 0;
+	if(useMemo) {
+		auto it = groupOf.find(normalizedLine);
+		if(it != groupOf.end()) g = it->second;
 	}
 
-	if(!matchFound) {
+	// Compare against each group's cached normalized key to avoid
+	// re-normalizing existing keys on every insertion. A line joins only
+	// the first group it matches, so counts sum to the number of lines.
+	if(g == groups.size()) {
+		for(size_t i = 0; i < groups.size(); i++) {
+			if(isMatch(normalizedLine, groups[i].normalizedKey)) {
+				g = i;
+				break;
+			}
+		}
+		if(useMemo) groupOf.emplace(normalizedLine, g);
+	}
+
+	if(g < groups.size()) {
+		groups[g].matches.push_back(line);
+	} else {
 		MatchGroup group;
 		group.key = line;
 		group.normalizedKey = normalizedLine;
@@ -80,12 +98,17 @@ void Matcher::add(std::string line) {
 void Matcher::show(std::ostream* output) {
 	// Sort groups alphabetically by key to match the behaviour of the
 	// previous std::map-based implementation and GNU uniq conventions.
-	std::sort(groups.begin(), groups.end(),
-		[](const MatchGroup& a, const MatchGroup& b) {
-			return a.key < b.key;
+	// Sort pointers, not the groups, so groupOf's indices stay valid.
+	std::vector<const MatchGroup*> sorted;
+	sorted.reserve(groups.size());
+	for(const auto& group : groups) sorted.push_back(&group);
+	std::sort(sorted.begin(), sorted.end(),
+		[](const MatchGroup* a, const MatchGroup* b) {
+			return a->key < b->key;
 		});
 
-	for(const auto& group : groups) {
+	for(const MatchGroup* groupPtr : sorted) {
+		const MatchGroup& group = *groupPtr;
 		bool first = true;
 		for(const auto& matchItem : group.matches) {
 			if(first || _settings.showAllMatches) {
@@ -105,11 +128,27 @@ void Matcher::show(std::ostream* output) {
 	}
 }
 
+// Turns the threshold into an integer edit budget k and asks for the distance
+// only up to k, so far-away keys are rejected without the full O(n*m) DP.
+// The final comparisons are the same expressions as the unbounded version,
+// so results are identical.
 bool Matcher::isMatch(const std::string& s1, const std::string& s2) {
+	const float d = _settings.maxDistance;
+	if(!(d >= 0)) return false; // negative or NaN: no distance qualifies
+	const unsigned int maxLen = std::max(s1.size(), s2.size());
+
 	if (_settings.comparisonMethod == NormalizedLevenshtein) {
-		return similarity::normalizedLevenshtein(s1, s2) <= _settings.maxDistance;
+		if(maxLen == 0) return true; // both empty: distance 0
+		// One edit of slack so float rounding can't make k too tight;
+		// the exact float test below still has the final say.
+		double budget = (double)d * maxLen;
+		unsigned int k = budget >= maxLen ? maxLen : (unsigned int)budget + 1;
+		unsigned int dist = similarity::boundedLevenshtein(s1, s2, k);
+		return (float)dist / (float)maxLen <= d;
 	}
-	return similarity::levenshteinDistance(s1, s2) <= _settings.maxDistance;
+
+	unsigned int k = d >= maxLen ? maxLen : (unsigned int)d;
+	return similarity::boundedLevenshtein(s1, s2, k) <= d;
 }
 
 
