@@ -6,8 +6,7 @@ Ideas collected while building 1.x, roughly by value. Nothing here is committed 
 
 - **Tune the cosine default** (0.05) on real logs. At 0.2 it merged different request paths on access logs because shared User-Agent strings dominate the trigram vector.
 - **Decide whether `-D` belongs in `--default`.** It is the biggest quality and speed lever for logs, but changes `--default` output, and 0.125 was tuned without it.
-- **Add a LICENSE**, and ship the third-party notices: TCLAP is MIT, Catch2 is BSL-1.0.
-- **Release binaries**: build on tags in GitHub Actions and attach Linux x86_64/arm64 and Windows binaries to a release.
+- **Add a LICENSE before the first release**, and ship the third-party notices in the release archives: TCLAP (compiled into the binary) is MIT, Catch2 (tests only) is BSL-1.0.
 - **Delete merged branches** on GitHub.
 
 ## Nice to have
@@ -17,9 +16,9 @@ Ideas collected while building 1.x, roughly by value. Nothing here is committed 
 - Machine-readable output: TSV or JSON with group, count, members and scores.
 - `--stats`: lines read, groups, memo hits, time.
 - An ETA on the progress bar.
-- Linux build option for `-static-libstdc++ -static-libgcc`, so one binary runs on older distros.
 - A man page generated from the help text.
-- CI on arm64 runners (currently verified by hand on Ubuntu aarch64), and a code coverage report.
+- A code coverage report in CI.
+- Windows arm64 release binary (needs an aarch64 MinGW toolchain on the runner).
 
 ## Might do (performance)
 

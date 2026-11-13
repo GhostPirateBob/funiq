@@ -24,6 +24,13 @@ Release notes for funiq, newest first. Versions follow [Semantic Versioning](htt
   argument parsing is table-driven, and the test suite and README use new examples (checked
   against an independent reference implementation). No output changes.
 
+### CI and releases
+- New CI workflow: warning-free lint (g++ and clang++), ShellCheck, and the full test suites
+  on Linux x86_64, Linux arm64, Windows and macOS
+- New release workflow: pushing a `v*` tag builds static Linux (x86_64, arm64), static Windows
+  and universal macOS binaries, tests each, attests provenance and creates a draft release
+- The terminal tests detect util-linux `script` and skip elsewhere instead of failing
+
 ### Docs
 - README rewritten; build, test and install details moved to BUILDING.md; new ARCHITECTURE.md,
   TODO.md and WIKI.md

@@ -1,0 +1,162 @@
+# Builds release binaries for every platform and attaches them to a DRAFT GitHub
+# release, so a release is complete (all assets, notes, provenance) before
+# anyone can see it:
+#   1. bump the version in src/funiq.cpp and CHANGELOG.md, merge to master
+#   2. git tag -s vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z
+#      Each platform builds, runs the full test suites against the release
+#      binary, and uploads an archive. The release job then attests build
+#      provenance for every archive, writes SHA256SUMS and creates the draft,
+#      with the CHANGELOG section for X.Y.Z as release notes.
+#   3. check the draft, then publish it: gh release edit vX.Y.Z --draft=false
+#
+# Linux binaries are fully static (no glibc/libstdc++ version requirements);
+# the Windows .exe is static MinGW; macOS is a universal (arm64 + x86_64) binary.
+#
+# Verify a download:
+#   gh attestation verify funiq-X.Y.Z-<platform>.tar.gz --repo GhostPirateBob/funiq
+#   sha256sum -c SHA256SUMS --ignore-missing
+name: Publish
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: true # all platforms or none
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux-x86_64
+            ldflags: -static
+          - os: ubuntu-24.04-arm
+            platform: linux-arm64
+            ldflags: -static
+          - os: windows-latest
+            platform: windows-x86_64
+          - os: macos-latest
+            platform: macos-universal
+            cxx: clang++ -arch arm64 -arch x86_64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Pick make
+        run: |
+          if command -v mingw32-make >/dev/null 2>&1; then echo "MAKE=mingw32-make" >> "$GITHUB_ENV"
+          elif command -v make >/dev/null 2>&1; then echo "MAKE=make" >> "$GITHUB_ENV"
+          else choco install make --no-progress -y && echo "MAKE=make" >> "$GITHUB_ENV"; fi
+
+      # Release flags go on the make command line: LDFLAGS=-static for Linux,
+      # a universal CXX for macOS. Windows keeps the makefile's MinGW -static.
+      - name: Build and test the release binary
+        env:
+          LDF: ${{ matrix.ldflags }}
+          CXXV: ${{ matrix.cxx }}
+        run: |
+          args=()
+          [ -n "$LDF" ] && args+=("LDFLAGS=$LDF")
+          [ -n "$CXXV" ] && args+=("CXX=$CXXV")
+          $MAKE "${args[@]}" toolchain
+          $MAKE "${args[@]}" all
+
+      - name: Check the tag matches funiq --version
+        run: |
+          version=$(./bin/funiq --version | awk '{print $2}')
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match funiq --version (${version})"
+            exit 1
+          fi
+          echo "VERSION=${version}" >> "$GITHUB_ENV"
+
+      - name: Check the binary is standalone
+        run: |
+          case "${{ matrix.platform }}" in
+            linux-*)   file bin/funiq | tee /dev/stderr | grep -q 'statically linked' ;;
+            macos-*)   lipo -archs bin/funiq | tee /dev/stderr | grep -q 'x86_64 arm64\|arm64 x86_64' ;;
+            windows-*) objdump -p bin/funiq.exe | grep 'DLL Name' | tee /dev/stderr \
+                         | grep -viq 'kernel32\|msvcrt\|ucrt\|api-ms-win' && exit 1 || true ;;
+          esac
+
+      - name: Package
+        run: |
+          name="funiq-${VERSION}-${{ matrix.platform }}"
+          mkdir -p "dist/$name"
+          cp README.md CHANGELOG.md "dist/$name/"
+          if [ -f bin/funiq.exe ]; then
+            cp bin/funiq.exe "dist/$name/"
+            (cd dist && 7z a -tzip "$name.zip" "$name" >/dev/null)
+          else
+            cp bin/funiq "dist/$name/"
+            tar -C dist -czf "dist/$name.tar.gz" "$name"
+          fi
+          rm -rf "dist/$name"
+          ls -l dist
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+
+      - name: Checksums
+        run: (cd dist && sha256sum funiq-* > SHA256SUMS && cat SHA256SUMS)
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/funiq-*
+
+      - name: Write the release notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v heading="## [${version}]" 'index($0, heading) == 1 { found = 1; next } /^## / && found { exit } found' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::error::CHANGELOG.md has no '## [${version}]' section"
+            exit 1
+          fi
+          cat >> notes.md <<EOF
+
+          ### Downloads
+          | platform | file |
+          |---|---|
+          | Linux x86_64 (static) | \`funiq-${version}-linux-x86_64.tar.gz\` |
+          | Linux arm64 (static) | \`funiq-${version}-linux-arm64.tar.gz\` |
+          | Windows x86_64 (static) | \`funiq-${version}-windows-x86_64.zip\` |
+          | macOS (universal) | \`funiq-${version}-macos-universal.tar.gz\` |
+
+          ### Verify
+          Every archive has a GitHub build-provenance attestation, and SHA256SUMS lists their hashes:
+          \`\`\`
+          gh attestation verify funiq-${version}-<platform>.tar.gz --repo ${GITHUB_REPOSITORY}
+          sha256sum -c SHA256SUMS --ignore-missing
+          \`\`\`
+          EOF
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --draft --verify-tag --title "${GITHUB_REF_NAME}" --notes-file notes.md

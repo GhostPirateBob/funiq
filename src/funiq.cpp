@@ -88,7 +88,7 @@ public:
 		std::cout << cmd.getProgramName() << " " << cmd.getVersion() << std::endl;
 	}
 
-	virtual void usage(TCLAP::CmdLineInterface& cmd) {
+	virtual void usage(TCLAP::CmdLineInterface& /*cmd*/) {
 		std::cout
 			<< "funiq - Fuzzy unique line filtering (like uniq, but fuzzy)\n"
 			<< "\n"

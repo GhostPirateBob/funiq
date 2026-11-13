@@ -1,0 +1,73 @@
+# Lint, build and test on every push to master and every pull request, on Linux
+# (x86_64 and arm64), Windows (MinGW, static) and macOS. Never publishes; see
+# publish.yml for releases.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Our own code must compile without warnings on both compilers. Vendored
+      # TCLAP/Catch headers are excluded by path; -Wpedantic is not applied to
+      # test.cpp because Catch's TEST_CASE macro uses __COUNTER__.
+      - name: Compiler warnings (g++ and clang++)
+        run: |
+          status=0
+          for cxx in g++ clang++; do
+            out=$({ "$cxx" -std=c++11 -Wall -Wextra -Wpedantic -pthread -Ilib -fsyntax-only src/funiq.cpp 2>&1
+                    "$cxx" -std=c++11 -Wall -Wextra -pthread -Ilib -fsyntax-only test/test.cpp 2>&1; } \
+                  | grep -E '^(src|lib/funiq|test)/[^:]*:[0-9]+:[0-9]+: (warning|error)' || true)
+            if [ -n "$out" ]; then echo "::error::$cxx warnings in first-party code"; echo "$out"; status=1; fi
+          done
+          exit $status
+
+      - name: ShellCheck
+        run: shellcheck -S warning test/cli_test.sh
+
+      - name: Python scripts compile
+        run: python3 -m py_compile test/fixtures/gen_synthetic.py test/update_readme_usage.py
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The Windows image ships MinGW-w64 (with mingw32-make); the makefile then
+      # picks its compiler and links -static. Fall back to installing make.
+      - name: Pick make
+        run: |
+          if command -v mingw32-make >/dev/null 2>&1; then echo "MAKE=mingw32-make" >> "$GITHUB_ENV"
+          elif command -v make >/dev/null 2>&1; then echo "MAKE=make" >> "$GITHUB_ENV"
+          else choco install make --no-progress -y && echo "MAKE=make" >> "$GITHUB_ENV"; fi
+
+      - name: Toolchain
+        run: $MAKE toolchain
+
+      - name: Build and test (unit + CLI)
+        run: $MAKE all
+
+      - name: Version
+        run: ./bin/funiq --version
+
+      - name: Install round trip
+        run: |
+          $MAKE install BINDIR="$PWD/stage"
+          ./stage/funiq --version
+          $MAKE uninstall BINDIR="$PWD/stage"
