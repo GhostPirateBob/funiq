@@ -1,122 +1,99 @@
-Funiq (fuzzy uniq) is a command line tool for performing fuzzy string matching against lists of words. To compile, clone the source and run make at the project's root; the funiq binary will be compiled to the bin/ directory.
+# funiq
 
-# Examples
+`uniq`, but fuzzy. funiq reads lines (from a file or stdin) and folds together the ones that are *nearly* the same: typos, case and punctuation differences, or log lines that differ only in their timestamps and IDs. It prints one line per group, optionally with counts, every member, or how far each member is from its group.
 
-## Basic deduplication
+It is a single static binary with no runtime dependencies on Windows, and builds with any C++11 compiler on Linux (x86_64 and arm64), MinGW and Cygwin. Matching runs on all CPU cores and gives the same output for any thread count.
 
-Consider the file test.txt:
+```
+$ funiq -iI -d 4 -c ships.txt
+      3 USS Defiant
+      4 USS Enterprise
+      3 USS Voyager
+```
 
-	The Fellowship of The Ring
-	the fellowship ofteh reing
-	The Flopship of the Rung
-	Felloship of the Ring
-	The Two Towers
-	The Twin Towers
-	the towers
-	The Return of the King
-	Return of the King
-	Teh return of theking
+**Build and install:** `make && make install` (details, platforms and tests in [BUILDING.md](BUILDING.md)).
 
-Running funiq on this list and telling it to ignore casing (-i) and non-alphanumeric characters (-I)
+## Examples
 
-	$ funiq -iI test.txt
+`ships.txt`:
 
-Results in:
+	USS Enterprise
+	uss enterprize
+	U.S.S. Enterprise
+	Enterprize
+	USS Voyager
+	USS Voyagr
+	uss-voyager
+	USS Defiant
+	USS Defient
+	Defiant
 
-	Felloship of the Ring
-	The Fellowship of The Ring
-	The Flopship of the Rung
-	The Return of the King
-	The Two Towers
+Ignoring case (`-i`) and punctuation (`-I`), with the default threshold of 3 edits:
 
-Which is ok, but it hasn't produced the desired results with The Fellowship of the Ring. Using the -d option, we can increase the threshold at which matches are considered (default is 3):
+	$ funiq -iI ships.txt
+	Enterprize
+	USS Defiant
+	USS Enterprise
+	USS Voyager
 
-	$ funiq -iI -d 4 test.txt
+"Enterprize" is still on its own: once case and punctuation are gone it is 4 edits away from "ussenterprise" (3 deletions and a substitution). Raise the threshold with `-d`:
 
-	The Fellowship of The Ring
-	The Return of the King
-	The Two Towers
+	$ funiq -iI -d 4 ships.txt
+	USS Defiant
+	USS Enterprise
+	USS Voyager
 
-Which is what we were looking for.
+### Counts, members and distances
 
-## Normalized Levenshtein
+`-c` prefixes each group with its size, like `uniq -c`. `-a` prints every member, tab-separated after the group's representative. `--scores` adds each member's distance from the group (edits, or a 0.0–1.0 ratio for the normalized methods) and implies `-a`:
 
-The default Levenshtein method uses a fixed edit distance, which means short strings are matched more aggressively than long ones. The normalized method scales the distance to a 0.0–1.0 range based on string length, giving more consistent results across varying lengths.
+	$ funiq -iI -d 4 --scores ships.txt
+	USS Defiant	USS Defient (1)	Defiant (3)
+	USS Enterprise	uss enterprize (1)	U.S.S. Enterprise (0)	Enterprize (4)
+	USS Voyager	USS Voyagr (1)	uss-voyager (0)
 
-A good general-purpose preset for catching typos and near-duplicates:
+Output is sorted alphabetically by representative.
 
-	$ funiq -iI -m normalized-levenshtein -d 0.125 names.txt
+### Thresholds that scale with length
 
-This treats strings as duplicates when they differ by roughly 12.5% or less of their length, which works well for both short and long strings. 0.125 is also the default threshold for the normalized method when `-d` is omitted (the absolute method defaults to 3 edits).
+A fixed edit count is generous for short lines and strict for long ones. `-m normalized-levenshtein` divides the edits by the longer line's length, so `-d` becomes a fraction: 0.125 means "differs in at most about an eighth of its characters". That combination with `-iI` is the preset `--default`, which a bare `-d` also selects:
 
-## Piping from stdin
+	$ funiq -d names.txt                    # same as: funiq -iI -m normalized-levenshtein -d 0.125
+	$ funiq -d 0.2 -iI -m normalized-levenshtein names.txt    # -d with a number is the threshold
 
-Funiq reads from stdin when no filename is given, so it works naturally in pipelines:
+### Logs
 
-	$ cat names.txt | funiq -iI
+Log lines that differ only in timestamps, PIDs, ports or IP addresses are usually the same event. `-D` (`--mask-digits`) compares every run of digits as a single `0`, so those lines become exact duplicates, which is also much faster because repeats are recognised without comparing anything:
 
-	$ grep -i error log.txt | funiq -iI -d 5 | sort
+	$ funiq -d -D -c error.log
+	$ zcat access.log.gz | funiq -d -D -c | sort -rn | head
 
-	$ history | awk '{$1=""; print $0}' | funiq -d 2
+On 20,000 synthetic nginx lines `-D` turns 13,024 groups into 109, and 5.5s into 0.2s.
 
-## Counting duplicates
+### Comparison methods
 
-Use `-c` to prefix each line with the number of matches found, similar to `uniq -c`:
+| `-m` | distance | default `-d` | good for |
+|---|---|---|---|
+| `levenshtein` (default) | edit count | 3 | short strings, a few typos |
+| `normalized-levenshtein` | edits ÷ longer length | 0.125 | mixed lengths |
+| `token-sort` | normalized, after sorting the words | 0.125 | the same words in another order |
+| `cosine` | 1 − cosine similarity of character trigrams | 0.05 | reordered fields; tolerant, so keep `-d` small |
 
-	$ funiq -iI -d 4 -c test.txt
+With `-m token-sort -I`, punctuation separates words: `user=bob,ip=1` has the words `1 bob ip user`.
 
-	      4 The Fellowship of The Ring
-	      3 The Return of the King
-	      3 The Two Towers
+### Groups and representatives
 
-## Showing all duplicates
+A line joins the **first** existing group within the threshold, and a group is printed as the line that started it. `--best` joins the **closest** group instead (ties go to the older group). `--rep longest` prints each group as its longest member, which is often the most informative one.
 
-Use `-a` to show every matched string, not just the representative:
+### Colour
 
-	$ funiq -iI -d 4 -a test.txt
+When writing to a terminal, counts are coloured by frequency (1 gray, 2–9 green, 10–99 yellow, 100+ bold red), extra members are dim and `--scores` are green or yellow depending on how close they are. Piped output is never coloured. `--color always|never` overrides the check; `NO_COLOR` and `FORCE_COLOR` are honoured.
 
-	The Fellowship of The Ring	the fellowship ofteh reing	The Flopship of the Rung	Felloship of the Ring
-	The Return of the King	Return of the King	Teh return of theking
-	The Two Towers	The Twin Towers	the towers
+### Threads
 
-Duplicates are shown tab-separated on the same line as their group. Add `--scores` to see how far each duplicate is from its group (edits, or a 0.0–1.0 ratio for the normalized methods); it implies `-a`:
+`-j <n>` sets the number of worker threads (default: all CPU cores). The output is identical for any `-j`.
 
-	$ printf 'hello\nhallo\nhelp!\n' | funiq -d 2 --scores
-
-	hello	hallo (1)	help! (2)
-
-## Logs: masking digits
-
-Log lines that differ only in timestamps, PIDs, ports or IP addresses are usually the same event. `-D` (`--mask-digits`) compares every run of digits as a single `0`, so those lines become exact duplicates. That is both more accurate and much faster, because repeated lines are recognised without any comparison:
-
-	$ funiq --default -D -c error.log
-
-On 20,000 synthetic nginx lines this turns 13,024 groups into 109, and 5.5s into 0.2s.
-
-## Comparison methods
-
-`-m` picks how two lines are compared:
-
-| method | distance | good for |
-|---|---|---|
-| `levenshtein` (default) | edit count | short strings, fixed small typos |
-| `normalized-levenshtein` | edits ÷ longer length | mixed lengths; `--default` uses 0.125 |
-| `token-sort` | normalized, after sorting the words | the same words in a different order |
-| `cosine` | 1 − cosine similarity of character trigrams | reordered fields; very tolerant, so keep `-d` small |
-
-With `-m token-sort -I`, punctuation separates words (`user=bob,ip=1` has the words `1 bob ip user`).
-
-## Choosing groups and representatives
-
-By default a line joins the **first** existing group within range, and the group is printed as the first line that started it. `--best` joins the **closest** group instead (ties go to the older group). `--rep longest` prints each group as its longest member, which is often the most informative.
-
-## Threads
-
-Matching runs on all CPU cores by default; `-j <n>` sets the number of threads. The output is identical for any thread count.
-
-# Usage
-
-Funiq can read from a file or have its input piped from stdin.
+## Usage
 
 <!-- usage:start (generated from `funiq -h`; test/cli_test.sh checks it) -->
 ```
@@ -161,60 +138,10 @@ Examples:
 ```
 <!-- usage:end -->
 
-# Installation
+## More
 
-You will need the GNU compiler collection installed, along with the make build tool. Clone the project, and run
-
-```
-make
-```
-
-in the project directory. This will build the `funiq` binary to `bin/funiq` and then run the test suite. A test failure will not prevent the binary from being built.
-
-## Installing to PATH
-
-To install the compiled binary:
-
-```
-make install
-```
-
-This will automatically install to the first available location:
-
-1. `~/.local/bin` — if it exists (no sudo needed)
-2. `/usr/local/bin` — standard system-wide location (may need sudo)
-3. `/usr/bin` — last resort (may need sudo)
-
-If the install fails due to permissions, you'll be prompted to retry with `sudo`:
-
-```
-sudo make install
-```
-
-You can also override the install location with `PREFIX`:
-
-```
-make install PREFIX=$HOME/.local
-sudo make install PREFIX=/usr
-```
-
-To remove it:
-
-```
-make uninstall
-```
-
-## Pre-built binaries
-
-Pre-built Linux and Windows binaries are available from the [Actions](../../actions) tab. Select the latest successful workflow run and download the artifact for your platform.
-
-# Build targets
-
-| Command            | Description                                              |
-|--------------------|----------------------------------------------------------|
-| `make`             | Build the binary and run tests                           |
-| `make build`       | Build the binary only                                    |
-| `make test`        | Compile and run the test suite                           |
-| `make install`     | Install the binary (auto-detects `~/.local/bin`, `/usr/local/bin`, or `/usr/bin`) |
-| `make uninstall`   | Remove the installed binary                              |
-| `make clean`       | Remove compiled binaries from `bin/`                     |
+- [BUILDING.md](BUILDING.md): toolchains, make targets, installing, tests, CI
+- [ARCHITECTURE.md](ARCHITECTURE.md): how matching works and why it is fast
+- [CHANGELOG.md](CHANGELOG.md): release notes
+- [TODO.md](TODO.md): ideas and possible next steps
+- [WIKI.md](WIKI.md): outline for a project wiki

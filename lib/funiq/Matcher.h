@@ -1,5 +1,5 @@
-#ifndef _FUNIQ_MATCHER_
-#define _FUNIQ_MATCHER_
+#ifndef FUNIQ_MATCHER_H
+#define FUNIQ_MATCHER_H
 
 #include <algorithm>
 #include <atomic>
@@ -18,9 +18,6 @@
 #include "Settings.h"
 #include "similarity.h"
 
-#define TOTALS_FIELD_WIDTH 7 // count-field width 7 used by GNU uniq
-
-typedef std::vector<std::string> StringList;
 
 // Each group stores its original key, cached normalized key (and trigram
 // profile for -m cosine), its members, and each member's distance from the
@@ -29,7 +26,7 @@ struct MatchGroup {
 	std::string key;
 	std::string normalizedKey;
 	similarity::Profile profile;
-	StringList matches;
+	std::vector<std::string> matches;
 	std::vector<double> scores;
 };
 
@@ -49,17 +46,19 @@ struct Hit {
 	Hit(size_t g, double s) : group(g), score(s) {}
 };
 
-class Matcher{
+class Matcher {
 public:
-	Matcher(Settings& settings);
-	void add(std::string line);
+	explicit Matcher(const Settings& settings);
+	void add(const std::string& line);
 	// Same result as calling add() on each line in order, but the scan
 	// against groups that existed before the batch runs on up to `threads`
 	// threads.
 	void addBatch(const std::vector<std::string>& lines, unsigned threads);
-	void show(std::ostream* output);
+	void show(std::ostream* output) const;
 private:
-	Settings& _settings;
+	// Width of the -c count column, right-aligned like `uniq -c`.
+	static const int countWidth = 7;
+	const Settings& opts;
 	std::vector<MatchGroup> groups;
 	// normalized line -> where it went. Safe under greedy first-match: groups
 	// created later have higher indices, so a repeat line's first match can
@@ -77,7 +76,7 @@ private:
 	bool distanceTo(const Candidate& c, size_t i, std::vector<unsigned int>& rows, double& score) const;
 	// A negative (or NaN) threshold matches nothing, not even an identical
 	// line, so repeats must not be memoised into one group there.
-	bool memoEnabled() const { return _settings.maxDistance >= 0 && !_settings.bestMatch; }
+	bool memoEnabled() const { return opts.maxDistance >= 0 && !opts.bestMatch; }
 	Hit lookupMemo(const std::string& normalizedLine) const;
 	Hit findMatch(const Candidate& c, size_t from, size_t to, std::vector<unsigned int>& rows) const;
 	void place(const std::string& line, Candidate& c, Hit hit);
@@ -89,27 +88,26 @@ private:
 // it only ever skips pairs that would be rejected (most of them, in practice).
 // Cosine has no such bound.
 inline bool Matcher::lengthRulesOut(unsigned int len, unsigned int keyLen) const {
-	if(_settings.comparisonMethod == Cosine) return false;
+	if(opts.comparisonMethod == Cosine) return false;
 	unsigned int diff = len > keyLen ? len - keyLen : keyLen - len;
-	if(_settings.comparisonMethod != Levenshtein) {
+	if(opts.comparisonMethod != Levenshtein) {
 		unsigned int maxLen = std::max(len, keyLen);
-		return maxLen > 0 && (float)diff / (float)maxLen > _settings.maxDistance;
+		return maxLen > 0 && (float)diff / (float)maxLen > opts.maxDistance;
 	}
-	return diff > _settings.maxDistance;
+	return diff > opts.maxDistance;
 }
 
-Matcher::Matcher(Settings& settings):_settings(settings) {
-}
+Matcher::Matcher(const Settings& settings) : opts(settings) {}
 
 // Normalize a string according to the current settings: lowercase, collapse
 // digit runs, then either sort its words (-m token-sort; with -I punctuation
 // separates words) or strip non-alphanumerics (-I). Paid once per line.
 std::string Matcher::normalize(const std::string& s) const {
 	std::string result = s;
-	if(_settings.caseInsensitive)
+	if(opts.caseInsensitive)
 		std::transform(result.begin(), result.end(), result.begin(),
 			[](unsigned char c) { return (char)std::tolower(c); });
-	if(_settings.maskDigits) {
+	if(opts.maskDigits) {
 		std::string masked;
 		masked.reserve(result.size());
 		for(size_t i = 0; i < result.size(); i++) {
@@ -119,8 +117,8 @@ std::string Matcher::normalize(const std::string& s) const {
 		}
 		result.swap(masked);
 	}
-	if(_settings.comparisonMethod == TokenSort) {
-		if(_settings.ignoreNonAlphaNumeric)
+	if(opts.comparisonMethod == TokenSort) {
+		if(opts.ignoreNonAlphaNumeric)
 			for(auto& c : result) if(!std::isalnum((unsigned char)c)) c = ' ';
 		std::istringstream words(result);
 		std::vector<std::string> tokens;
@@ -128,7 +126,7 @@ std::string Matcher::normalize(const std::string& s) const {
 		std::sort(tokens.begin(), tokens.end());
 		result.clear();
 		for(size_t i = 0; i < tokens.size(); i++) result += (i ? " " : "") + tokens[i];
-	} else if(_settings.ignoreNonAlphaNumeric) {
+	} else if(opts.ignoreNonAlphaNumeric) {
 		result.erase(std::remove_if(result.begin(), result.end(), [](unsigned char c){
 			return !std::isalnum(c);
 		}), result.end());
@@ -139,7 +137,7 @@ std::string Matcher::normalize(const std::string& s) const {
 Candidate Matcher::prepare(const std::string& line) const {
 	Candidate c;
 	c.normalized = normalize(line);
-	if(_settings.comparisonMethod == Cosine) c.profile = similarity::trigramProfile(c.normalized);
+	if(opts.comparisonMethod == Cosine) c.profile = similarity::trigramProfile(c.normalized);
 	return c;
 }
 
@@ -160,7 +158,7 @@ Hit Matcher::findMatch(const Candidate& c, size_t from, size_t to,
 		if(lengthRulesOut(len, keyLengths[i])) continue;
 		double score;
 		if(!distanceTo(c, i, rows, score)) continue;
-		if(!_settings.bestMatch) return Hit(i, score);
+		if(!opts.bestMatch) return Hit(i, score);
 		if(best.group == NO_GROUP || score < best.score) best = Hit(i, score);
 		if(score == 0) break; // nothing can beat an exact match
 	}
@@ -187,7 +185,7 @@ void Matcher::place(const std::string& line, Candidate& c, Hit hit) {
 }
 
 // A line joins only one group, so counts sum to the number of lines.
-void Matcher::add(std::string line) {
+void Matcher::add(const std::string& line) {
 	Candidate c = prepare(line);
 	Hit hit = lookupMemo(c.normalized);
 	if(hit.group == NO_GROUP) hit = findMatch(c, 0, groups.size(), scratch);
@@ -225,7 +223,7 @@ void Matcher::addBatch(const std::vector<std::string>& lines, unsigned threads) 
 		Hit h = lookupMemo(candidates[i].normalized); // an earlier line in this batch may have memoised it
 		if(h.group == NO_GROUP) {
 			h = hit[i];
-			if(_settings.bestMatch) {
+			if(opts.bestMatch) {
 				Hit later = findMatch(candidates[i], frozen, groups.size(), scratch);
 				if(later.group != NO_GROUP && (h.group == NO_GROUP || later.score < h.score)) h = later;
 			} else if(h.group == NO_GROUP) {
@@ -238,12 +236,12 @@ void Matcher::addBatch(const std::vector<std::string>& lines, unsigned threads) 
 
 std::string Matcher::formatScore(double score) const {
 	std::ostringstream out;
-	if(_settings.comparisonMethod == Levenshtein) out << (unsigned long)score;
+	if(opts.comparisonMethod == Levenshtein) out << (unsigned long)score;
 	else out << std::fixed << std::setprecision(3) << score;
 	return out.str();
 }
 
-void Matcher::show(std::ostream* output) {
+void Matcher::show(std::ostream* output) const {
 	// Each group is printed as its representative (first line seen, or the
 	// longest member with --rep longest; ties go to the earlier line).
 	struct Row { const MatchGroup* group; size_t rep; };
@@ -251,7 +249,7 @@ void Matcher::show(std::ostream* output) {
 	rows.reserve(groups.size());
 	for(const auto& group : groups) {
 		size_t rep = 0;
-		if(_settings.representative == RepLongest)
+		if(opts.representative == RepLongest)
 			for(size_t j = 1; j < group.matches.size(); j++)
 				if(group.matches[j].size() > group.matches[rep].size()) rep = j;
 		rows.push_back(Row{&group, rep});
@@ -264,28 +262,28 @@ void Matcher::show(std::ostream* output) {
 
 	// Colour adds SGR codes around fields and changes nothing else, so the
 	// output with codes stripped is byte-identical to the plain output.
-	const bool on = _settings.color;
-	const bool all = _settings.showAllMatches || _settings.showScores;
+	const bool on = opts.color;
+	const bool all = opts.showAllMatches || opts.showScores;
 	for(const Row& row : rows) {
 		const MatchGroup& group = *row.group;
-		if(_settings.showTotals) {
+		if(opts.showTotals) {
 			// Pad first, then colour, so codes don't disturb the alignment.
 			// Frequency buckets make the hot lines of a log jump out.
 			const size_t n = group.matches.size();
 			std::ostringstream count;
-			count << std::setw(TOTALS_FIELD_WIDTH) << n;
+			count << std::setw(countWidth) << n;
 			const color::Style& style = n >= 100 ? color::BoldRed : n >= 10 ? color::Yellow
 			                          : n >= 2 ? color::Green : color::Gray;
-			*output << color::paint(on, style, count.str()) << " "; // space for compatibility with GNU uniq
+			*output << color::paint(on, style, count.str()) << " "; // uniq -c also separates count and line with one space
 		}
 		*output << group.matches[row.rep];
 		if(all) {
 			for(size_t j = 0; j < group.matches.size(); j++) {
 				if(j == row.rep) continue;
 				*output << "\t" << color::paint(on, color::Dim, group.matches[j]);
-				if(_settings.showScores) {
+				if(opts.showScores) {
 					// Green: well inside the threshold; yellow: near its edge.
-					bool close = group.scores[j] <= _settings.maxDistance / 2.0;
+					bool close = group.scores[j] <= opts.maxDistance / 2.0;
 					*output << " " << color::paint(on, close ? color::Green : color::Yellow,
 					                               "(" + formatScore(group.scores[j]) + ")");
 				}
@@ -306,18 +304,18 @@ void Matcher::show(std::ostream* output) {
 // computation, so results are identical.
 bool Matcher::distanceTo(const Candidate& c, size_t i, std::vector<unsigned int>& rows,
                          double& score) const {
-	const float d = _settings.maxDistance;
+	const float d = opts.maxDistance;
 	if(!(d >= 0)) return false; // negative or NaN: no distance qualifies
 	const std::string& s1 = c.normalized;
 	const std::string& s2 = groups[i].normalizedKey;
 
-	if(_settings.comparisonMethod == Cosine) {
+	if(opts.comparisonMethod == Cosine) {
 		score = similarity::cosineDistance(c.profile, groups[i].profile);
 		return score <= d;
 	}
 
 	const unsigned int maxLen = std::max(s1.size(), s2.size());
-	if(_settings.comparisonMethod != Levenshtein) { // normalized, token-sort
+	if(opts.comparisonMethod != Levenshtein) { // normalized, token-sort
 		if(maxLen == 0) { score = 0; return true; } // both empty: distance 0
 		// One edit of slack so float rounding can't make k too tight;
 		// the exact float test below still has the final say.
@@ -336,4 +334,4 @@ bool Matcher::distanceTo(const Candidate& c, size_t i, std::vector<unsigned int>
 }
 
 
-#endif
+#endif // FUNIQ_MATCHER_H

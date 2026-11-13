@@ -176,142 +176,78 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 		}
 	}
 
-	TCLAP::CmdLine cmd("", ' ', "1.1.0");
+	TCLAP::CmdLine cmd("", ' ', "1.2.0");
 
 	// Replace TCLAP's default verbose output with our compact format
 	FuniqOutput customOutput;
 	cmd.setOutput(&customOutput);
 
-	TCLAP::UnlabeledValueArg<std::string> filenameArg (
-		"filename",
-		"File to read. If omitted will read from stdin.",
-		false, "", "filename");
-	TCLAP::ValueArg<float> distanceArg(
-		"d","distance",
-		"Max distance threshold (default depends on the method)",
-		false, 3, "number");
-	TCLAP::SwitchArg caseSwitch(
-		"i","case-insensitive",
-		"Case-insensitive matching");
-	TCLAP::SwitchArg showAllSwitch(
-		"a","show-all",
-		"Show all duplicates");
-	TCLAP::SwitchArg showTotalsSwitch(
-		"c","show-counts",
-		"Show duplicate counts");
-	TCLAP::SwitchArg ignoreNonAlphaNumericSwitch(
-		"I","ignore-non-alpha-numeric",
-		"Ignore non-alphanumeric characters");
-	TCLAP::SwitchArg defaultSwitch(
-		"","default",
-		"Shorthand for -iI -m normalized-levenshtein -d 0.125");
-	TCLAP::ValueArg<unsigned> threadsArg(
-		"j","threads",
-		"Worker threads (default: all CPU cores)",
-		false, 0, "n");
-	TCLAP::SwitchArg maskDigitsSwitch(
-		"D","mask-digits",
-		"Each run of digits compares as a single 0");
-	TCLAP::SwitchArg scoresSwitch(
-		"","scores",
-		"Show each duplicate's distance from its group (implies -a)");
-	TCLAP::SwitchArg bestSwitch(
-		"","best",
-		"Join the closest group instead of the first within range");
+	// Option descriptions here only surface in TCLAP's own error messages;
+	// --help prints FuniqOutput::usage above. Flag names are the stable CLI.
+	const std::vector<std::pair<std::string, ComparisonMethod>> methods = {
+		{ "levenshtein", Levenshtein }, { "normalized-levenshtein", NormalizedLevenshtein },
+		{ "token-sort", TokenSort }, { "cosine", Cosine } };
+	std::vector<std::string> methodNames, repNames = { "first", "longest" },
+		colorNames = { "auto", "always", "never" };
+	for(const auto& m : methods) methodNames.push_back(m.first);
+	TCLAP::ValuesConstraint<std::string> methodChoices(methodNames), repChoices(repNames),
+		colorChoices(colorNames);
 
-	std::vector<std::string> allowedRepresentatives;
-	allowedRepresentatives.push_back("first");
-	allowedRepresentatives.push_back("longest");
-	TCLAP::ValuesConstraint<std::string> representativeConstraint(allowedRepresentatives);
-	TCLAP::ValueArg<std::string> representativeArg(
-		"","rep",
-		"Group representative (default: first)",
-		false, "first", &representativeConstraint);
-
-	std::vector<std::string> allowedComparisonMethods;
-	allowedComparisonMethods.push_back("levenshtein");
-	allowedComparisonMethods.push_back("normalized-levenshtein");
-	allowedComparisonMethods.push_back("token-sort");
-	allowedComparisonMethods.push_back("cosine");
-	TCLAP::ValuesConstraint<std::string> comparisonMethodsConstraint(allowedComparisonMethods);
-
-	TCLAP::ValueArg<std::string> comparisonMethodArg(
-			"m","method",
-			"Comparison method (default: levenshtein)",
-			false, "levenshtein", &comparisonMethodsConstraint);
-
-	cmd.add(filenameArg);
-	cmd.add(comparisonMethodArg);
-	cmd.add(distanceArg);
-	cmd.add(caseSwitch);
-	cmd.add(showAllSwitch);
-	cmd.add(showTotalsSwitch);
-	cmd.add(ignoreNonAlphaNumericSwitch);
-	cmd.add(defaultSwitch);
-	cmd.add(threadsArg);
-	cmd.add(maskDigitsSwitch);
-	cmd.add(scoresSwitch);
-	cmd.add(bestSwitch);
-	cmd.add(representativeArg);
-
-	std::vector<std::string> allowedColorModes;
-	allowedColorModes.push_back("auto");
-	allowedColorModes.push_back("always");
-	allowedColorModes.push_back("never");
-	TCLAP::ValuesConstraint<std::string> colorConstraint(allowedColorModes);
-	TCLAP::ValueArg<std::string> colorArg(
-		"","color",
-		"Colour output (default: auto)",
-		false, "auto", &colorConstraint);
-	cmd.add(colorArg);
+	TCLAP::UnlabeledValueArg<std::string> inputFile("filename", "Input file (stdin when omitted)", false, "", "file");
+	TCLAP::ValueArg<std::string> method("m", "method", "Comparison method", false, "levenshtein", &methodChoices);
+	TCLAP::ValueArg<float> threshold("d", "distance", "Distance threshold", false, 3, "n");
+	TCLAP::ValueArg<unsigned> workers("j", "threads", "Worker threads", false, 0, "n");
+	TCLAP::ValueArg<std::string> representative("", "rep", "Group representative", false, "first", &repChoices);
+	TCLAP::ValueArg<std::string> colorWhen("", "color", "Colour output", false, "auto", &colorChoices);
+	TCLAP::SwitchArg foldCase("i", "case-insensitive", "Ignore case");
+	TCLAP::SwitchArg dropPunct("I", "ignore-non-alpha-numeric", "Ignore non-alphanumerics");
+	TCLAP::SwitchArg maskDigits("D", "mask-digits", "Mask runs of digits");
+	TCLAP::SwitchArg counts("c", "show-counts", "Prefix each group with its size");
+	TCLAP::SwitchArg everyMember("a", "show-all", "Print every member of each group");
+	TCLAP::SwitchArg scores("", "scores", "Print each member's distance");
+	TCLAP::SwitchArg closest("", "best", "Join the closest group");
+	TCLAP::SwitchArg preset("", "default", "Preset: -iI -m normalized-levenshtein -d 0.125");
+	TCLAP::Arg* const all[] = { &inputFile, &method, &threshold, &workers, &representative, &colorWhen,
+		&foldCase, &dropPunct, &maskDigits, &counts, &everyMember, &scores, &closest, &preset };
+	for(TCLAP::Arg* arg : all) cmd.add(arg);
 	cmd.parse(args);
 
-	const std::string& colorValue = colorArg.getValue();
-	colorMode = colorValue == "always" ? color::Always : colorValue == "never" ? color::Never : color::Auto;
+	colorMode = colorWhen.getValue() == "always" ? color::Always
+	          : colorWhen.getValue() == "never" ? color::Never : color::Auto;
 
-	settings.threads = threadsArg.getValue();
-	if(settings.threads == 0) settings.threads = std::thread::hardware_concurrency();
+	settings.threads = workers.getValue() ? workers.getValue() : std::thread::hardware_concurrency();
 	if(settings.threads == 0) settings.threads = 1; // hardware_concurrency() may not know
 
-	// --default sets sensible defaults for general-purpose fuzzy matching
-	if(defaultSwitch.getValue()) {
-		settings.caseInsensitive = true;
-		settings.ignoreNonAlphaNumeric = true;
+	// The preset first; explicit flags then refine it.
+	if(preset.getValue()) {
+		settings.caseInsensitive = settings.ignoreNonAlphaNumeric = true;
 		settings.comparisonMethod = NormalizedLevenshtein;
-		settings.maxDistance = 0.125;
-	} else {
-		settings.comparisonMethod = Levenshtein;
 	}
+	if(foldCase.getValue()) settings.caseInsensitive = true;
+	if(dropPunct.getValue()) settings.ignoreNonAlphaNumeric = true;
+	if(method.isSet())
+		for(const auto& m : methods)
+			if(m.first == method.getValue()) settings.comparisonMethod = m.second;
 
-	// Explicit flags override --default
-	if(caseSwitch.isSet()) settings.caseInsensitive = caseSwitch.getValue();
-	if(ignoreNonAlphaNumericSwitch.isSet()) settings.ignoreNonAlphaNumeric = ignoreNonAlphaNumericSwitch.getValue();
-	if(comparisonMethodArg.isSet()) {
-		std::string comparisonMethod = comparisonMethodArg.getValue();
-		if(comparisonMethod == "levenshtein") settings.comparisonMethod = Levenshtein;
-		if(comparisonMethod == "normalized-levenshtein") settings.comparisonMethod = NormalizedLevenshtein;
-		if(comparisonMethod == "token-sort") settings.comparisonMethod = TokenSort;
-		if(comparisonMethod == "cosine") settings.comparisonMethod = Cosine;
-	}
 	// The default threshold depends on the method: 3 edits is meaningless
 	// as a 0.0-1.0 ratio (everything would match). 0.125 is the tuned
 	// normalized preset. Cosine's 0.05 is deliberately tight and not yet
 	// tuned on real data: on nginx access logs 0.2 already merged different
 	// request paths and status codes, because long shared User-Agent strings
 	// dominate the trigram vector.
-	if(distanceArg.isSet()) settings.maxDistance = distanceArg.getValue();
+	if(threshold.isSet()) settings.maxDistance = threshold.getValue();
 	else if(settings.comparisonMethod == Levenshtein) settings.maxDistance = 3;
 	else if(settings.comparisonMethod == Cosine) settings.maxDistance = 0.05;
 	else settings.maxDistance = 0.125;
 
-	settings.showAllMatches = showAllSwitch.getValue();
-	settings.showTotals = showTotalsSwitch.getValue();
-	settings.maskDigits = maskDigitsSwitch.getValue();
-	settings.showScores = scoresSwitch.getValue();
-	settings.bestMatch = bestSwitch.getValue();
-	settings.representative = representativeArg.getValue() == "longest" ? RepLongest : RepFirst;
+	settings.maskDigits = maskDigits.getValue();
+	settings.bestMatch = closest.getValue();
+	settings.showTotals = counts.getValue();
+	settings.showAllMatches = everyMember.getValue();
+	settings.showScores = scores.getValue();
+	settings.representative = representative.getValue() == "longest" ? RepLongest : RepFirst;
 
-	filename = filenameArg.getValue();
+	filename = inputFile.getValue();
 }
 
 // Read from file if a filename is provided, otherwise read from stdin.
@@ -461,9 +397,9 @@ int main(int argc, char* argv[]) {
 		// (e.g. funiq ... | bat) receive all output before we exit.
 		std::cout.flush();
 
-	} catch (TCLAP::ArgException &e) {
-		std::cerr << "An error occurred: ";
-		std::cerr << e.error() << " for arg " << e.argId() << std::endl;
+	} catch (TCLAP::ArgException& e) {
+		std::cerr << color::paint(g_errColor, color::BoldRed, "funiq:") << " "
+		          << e.error() << " (" << e.argId() << ")\n";
 		return 1;
 	}
 

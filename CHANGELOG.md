@@ -1,9 +1,32 @@
 # Changelog
-All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Release notes for funiq, newest first. Versions follow [Semantic Versioning](https://semver.org/): a major bump means some output changed.
 
+## [1.2.0] - 2026-11-13
+
+### Added
+- Colour output when writing to a terminal: `-c` counts by frequency (1 gray, 2–9 green,
+  10–99 yellow, 100+ bold red), `-a` duplicates dim, `--scores` green/yellow, red errors,
+  coloured progress bar. Piped output is unchanged.
+- `--color auto|always|never`; `NO_COLOR` and `FORCE_COLOR` are honoured
+  (`--color` > `FORCE_COLOR` > `NO_COLOR` > `TERM=dumb` > terminal check)
+- `--opt=value` spelling for every option (`--color=never`, `--rep=longest`)
+- A bare `-d` (not followed by a number) is the `--default` preset: `funiq -d log.txt`.
+  `-d <number>` still sets the distance, so existing calls are unchanged.
+
+### Fixed
+- Since 1.0.0 a terminal run on fewer than 50 lines printed a progress bar with no final
+  newline just before the results
+
+### Changed
+- The remaining code, tests and examples carried over from earlier versions are rewritten:
+  the exact Levenshtein functions now wrap the bounded one, settings use member initialisers,
+  argument parsing is table-driven, and the test suite and README use new examples (checked
+  against an independent reference implementation). No output changes.
+
+### Docs
+- README rewritten; build, test and install details moved to BUILDING.md; new ARCHITECTURE.md,
+  TODO.md and WIKI.md
 
 ## [1.1.0] - 2026-11-13
 
@@ -59,19 +82,3 @@ the 0.4.x releases (progress bar, `--default`, compact help) were not recorded h
 - `make` never rebuilt a stale binary; Windows builds needed MinGW DLLs; `make` failed under
   Cygwin; `make install` on Windows wrote to the shell's private `/usr/bin` without `.exe`
 - Windows CI failed golden tests because checkout converted fixtures to CRLF
-
-## [0.3.0] - 2020-01-27
-
-Note - we've adopted semantic versioning from this point forward.
-
-### Added
-- Ability to use Normalized Levenshtein Distance (suggested by [@ComedyTomedy](https://github.com/ComedyTomedy)) via the`--method` flag
-
-## [0.2] - 2018-05-24
-
-### Changed
-- Made count behaviour compatible with GNU uniq. Flag for showing totals is now (`-c`), and the spacing between the totals column and the results column is now rendered with spaces instead of tabs. Contributed by [@sehrgut](https://github.com/sehrgut)
-
-## [0.1] - 2014-03-17
-
-Initial release
