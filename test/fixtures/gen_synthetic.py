@@ -2,7 +2,11 @@
 
 Only TEST-NET IPs (RFC 5737) and example.com hosts, so it is safe to commit
 to a public repo. Mixes near-duplicates (varying digits), distinct request
-shapes, exact repeats and varied lengths. Usage: python test/fixtures/gen_synthetic.py test/fixtures/synthetic.log
+shapes, exact repeats and varied lengths.
+
+Usage: python test/fixtures/gen_synthetic.py OUT [N]
+N base lines (default 500, which reproduces test/fixtures/synthetic.log)
+plus N/5 exact repeats. Larger N makes benchmark input.
 """
 
 from __future__ import annotations
@@ -21,8 +25,9 @@ PHP = ["PHP Warning:  Undefined array key \"{k}\" in /var/www/example.com/{f}.ph
        "PHP Fatal error:  Uncaught TypeError: count(): Argument #1 must be of type Countable in /var/www/example.com/{f}.php:{n}",
        "[error] {n}#{n}: *{m} open() \"/var/www/example.com{p}\" failed (2: No such file or directory)"]
 
+base = int(sys.argv[2]) if len(sys.argv) > 2 else 500
 lines: list[str] = []
-for _ in range(500):
+for _ in range(base):
     r = random.random()
     if r < 0.6:
         ip = f"{random.choice(NETS)}.{random.randint(1, 254)}"
@@ -35,7 +40,7 @@ for _ in range(500):
                                                n=random.randint(1, 999), m=random.randint(1, 99999),
                                                p=random.choice(PATHS)))
 # exact repeats, scattered
-for _ in range(100):
+for _ in range(base // 5):
     lines.insert(random.randrange(len(lines)), random.choice(lines))
 
 with open(sys.argv[1], "w", encoding="utf-8", newline="\n") as out:

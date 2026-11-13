@@ -2,7 +2,7 @@
 
 `uniq`, but fuzzy. funiq reads lines (from a file or stdin) and folds together the ones that are *nearly* the same: typos, case and punctuation differences, or log lines that differ only in their timestamps and IDs. It prints one line per group, optionally with counts, every member, or how far each member is from its group.
 
-It is a single static binary with no runtime dependencies on Windows, and builds with any C++11 compiler on Linux (x86_64 and arm64), MinGW and Cygwin. Matching runs on all CPU cores and gives the same output for any thread count.
+It is a single static binary with no runtime dependencies on Windows, and builds with any C++11 compiler on Linux (x86_64 and arm64), MinGW and Cygwin. Matching runs on all CPU cores and gives the same output for any thread count; it is 50× to over 3,000× faster than the original funiq on the same input, with identical results (see [Performance](#performance)).
 
 ```
 $ funiq -iI -d 4 -c ships.txt
@@ -92,6 +92,34 @@ When writing to a terminal, counts are coloured by frequency (1 gray, 2–9 gree
 ### Threads
 
 `-j <n>` sets the number of worker threads (default: all CPU cores). The output is identical for any `-j`.
+
+## Performance
+
+Compared with the original [mjfisheruk/funiq](https://github.com/mjfisheruk/funiq) (v0.3.0, its last commit `ae84605`, built with its own `-O2` flags), on 6,000 synthetic nginx/PHP log lines and the same flags. Both programs printed **byte-identical groups** in every case. funiq 1.2.0 is shown single-threaded (`-j 1`, the algorithmic gain) and on all cores. The 1.2.0 times are the mean of 3 runs.
+
+| flags | groups | upstream | 1.2.0 `-j 1` | 1.2.0 all cores | speedup |
+|---|---|---|---|---|---|
+| **Linux arm64** (4 cores, g++ 13) | | | | | |
+| `-d 3` | 3,671 | 306.3s | 0.243s | 0.087s | **1,259× / 3,537×** |
+| `-iI -d 3` | 3,671 | 150.3s | 0.232s | 0.083s | **647× / 1,815×** |
+| `-iI -m normalized-levenshtein -d 0.125` (`-d`) | 1,698 | 67.5s | 1.263s | 0.375s | **53× / 180×** |
+| **Windows x86_64** (12 threads, MinGW g++ 14) | | | | | |
+| `-d 3` | 3,671 | 303.3s | 0.351s | 0.157s | **864× / 1,932×** |
+| `-iI -d 3` | 3,671 | 138.7s | 0.386s | 0.161s | **360× / 862×** |
+| `-iI -m normalized-levenshtein -d 0.125` (`-d`) | 1,698 | 66.4s | 1.162s | 0.351s | **57× / 189×** |
+
+The original compares every line with every group using a full edit-distance table. 1.2.0 skips most pairs on length alone, stops each comparison as soon as the threshold is out of reach, recognises repeated lines without comparing them, and spreads the work over all cores (see [ARCHITECTURE.md](ARCHITECTURE.md)). The gap widens with input size: on 24,000 lines 1.2.0 takes 1–3 seconds, where the original's quadratic cost would run into hours. With `-D` on logs, most lines become repeats and runs are faster still.
+
+To reproduce:
+
+```
+python test/fixtures/gen_synthetic.py bench.log 5000      # 5,000 lines + 1,000 repeats
+git clone https://github.com/mjfisheruk/funiq upstream
+g++ -std=c++0x -O2 -Iupstream/lib upstream/src/funiq.cpp -o funiq-upstream
+time ./funiq-upstream -d 3 bench.log > old.txt
+time bin/funiq -d 3 bench.log > new.txt
+cmp old.txt new.txt          # on Windows the original writes CRLF: tr -d '\r' < old.txt | cmp - new.txt
+```
 
 ## Usage
 
