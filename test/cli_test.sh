@@ -84,6 +84,37 @@ golden golden-default-preset-counts.txt --default -c -j 8
 golden golden-iI-d3-all.txt -iI -d 3 -a --threads 3
 golden golden-norm-0.3-counts.txt -c -m normalized-levenshtein -d 0.3 -j 16
 
+# --- v1 flags ----------------------------------------------------------------
+expect() { # name, expected output, funiq args... (stdin from $IN)
+	local name=$1 want=$2; shift 2
+	local got
+	got=$(printf '%b' "$IN" | "$FUNIQ" "$@" 2>&1)
+	if [ "$got" = "$want" ]; then ok "$name"; else ko "$name" "got: $(printf '%s' "$got" | head -3)"; fi
+}
+IN='pid 123 exited\npid 98765 exited\npid exited\n'
+expect "--mask-digits groups lines differing only in numbers" \
+	"$(printf '%s\n' '      2 pid 123 exited' '      1 pid exited')" --mask-digits -d 0 -c
+IN='connection reset by peer\npeer by reset connection\n'
+expect "-m token-sort ignores word order (default threshold)" "      2 connection reset by peer" -m token-sort -c
+IN='user=alice action=login status=ok\nstatus=ok action=login user=alice\n'
+expect "-m cosine matches reordered fields" "      2 user=alice action=login status=ok" -m cosine -d 0.2 -c
+IN='abc\nabcdef\n'
+expect "--rep longest prints the longest member" "      2 abcdef" --rep longest -c
+IN='hello\nhallo\n'
+expect "--scores prints distances" "$(printf 'hello\thallo (1)')" --scores -d 2
+IN='aaaaaa\naaabbb\naaaabb\n'
+expect "--best joins the closest group" "$(printf '%s\n' '      1 aaaaaa' '      2 aaabbb')" --best -d 2 -c
+IN='hello\nhallo\nhelp!\n'
+expect "README --scores example" "$(printf 'hello\thallo (1)\thelp! (2)')" -d 2 --scores
+
+name="README usage block matches funiq -h"
+README="$(dirname "$0")/../README.md"
+want=$(sed -n '/<!-- usage:start/,/<!-- usage:end -->/p' "$README" | sed '1,2d;$d' | sed '$d')
+got=$("$FUNIQ" -h)
+if [ "$got" = "$want" ]; then ok "$name"; else ko "$name" "regenerate the README block from: funiq -h"; fi
+
+[ "$(printf 'x\n' | "$FUNIQ" --rep sideways >/dev/null 2>&1; echo $?)" != 0 ] && ok "--rep sideways exits non-zero" || ko "--rep sideways exits non-zero"
+
 # --- non-seekable file argument with progress bar active --------------------
 # Progress (stderr is a tty) pre-counts lines then rewinds; a FIFO can't rewind.
 name="FIFO filename with tty stderr keeps all lines"

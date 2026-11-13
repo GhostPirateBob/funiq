@@ -44,12 +44,21 @@ public:
 			<< "Usage: funiq [options] [filename]\n"
 			<< "\n"
 			<< "Options:\n"
-			<< "  -d <n>     Max distance threshold (default: 3, or 0.125 when normalized)\n"
-			<< "  -m <name>  Comparison method: levenshtein (default), normalized-levenshtein\n"
+			<< "  -d <n>     Max distance threshold (default: 3 edits for levenshtein,\n"
+			<< "             0.125 for normalized-levenshtein and token-sort, 0.05 for cosine)\n"
+			<< "  -m <name>  Comparison method:\n"
+			<< "               levenshtein             edit distance (default)\n"
+			<< "               normalized-levenshtein  edits / longer length (0.0-1.0)\n"
+			<< "               token-sort              normalized, ignoring word order\n"
+			<< "               cosine                  1 - trigram cosine similarity (0.0-1.0)\n"
 			<< "  -i         Case-insensitive matching\n"
-			<< "  -I         Ignore non-alphanumeric characters\n"
+			<< "  -I         Ignore non-alphanumeric characters (word separators for token-sort)\n"
+			<< "  -D         Mask digits: each run of digits compares as a single 0\n"
 			<< "  -c         Show duplicate counts (like uniq -c)\n"
 			<< "  -a         Show all duplicates, not just the representative\n"
+			<< "  --scores   Show each duplicate's distance from its group (implies -a)\n"
+			<< "  --best     Join the closest group instead of the first within range\n"
+			<< "  --rep <r>  Group representative: first (default) or longest\n"
 			<< "  --default  Shorthand for -iI -m normalized-levenshtein -d 0.125\n"
 			<< "  -j <n>     Worker threads (default: all CPU cores; output is identical)\n"
 			<< "  -h         Show this help\n"
@@ -63,7 +72,8 @@ public:
 			<< "  funiq -iI -d 5 names.txt                               Higher edit distance\n"
 			<< "  funiq -iI -m normalized-levenshtein -d 0.125 file.txt  Length-independent matching\n"
 			<< "  funiq -iI -c names.txt                                 Count duplicates\n"
-			<< "  grep error log.txt | funiq -iI -d 5 | sort            Combine with other tools\n";
+			<< "  grep error log.txt | funiq -iI -d 5 | sort            Combine with other tools\n"
+			<< "  funiq --default -D -c error.log                        Logs: ignore PIDs, times, IPs\n";
 	}
 
 	virtual void failure(TCLAP::CmdLineInterface& cmd, TCLAP::ArgException& e) {
@@ -95,7 +105,7 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 		false, "", "filename");
 	TCLAP::ValueArg<float> distanceArg(
 		"d","distance",
-		"Max distance threshold (default: 3, or 0.125 when normalized)",
+		"Max distance threshold (default depends on the method)",
 		false, 3, "number");
 	TCLAP::SwitchArg caseSwitch(
 		"i","case-insensitive",
@@ -116,10 +126,30 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 		"j","threads",
 		"Worker threads (default: all CPU cores)",
 		false, 0, "n");
+	TCLAP::SwitchArg maskDigitsSwitch(
+		"D","mask-digits",
+		"Each run of digits compares as a single 0");
+	TCLAP::SwitchArg scoresSwitch(
+		"","scores",
+		"Show each duplicate's distance from its group (implies -a)");
+	TCLAP::SwitchArg bestSwitch(
+		"","best",
+		"Join the closest group instead of the first within range");
+
+	std::vector<std::string> allowedRepresentatives;
+	allowedRepresentatives.push_back("first");
+	allowedRepresentatives.push_back("longest");
+	TCLAP::ValuesConstraint<std::string> representativeConstraint(allowedRepresentatives);
+	TCLAP::ValueArg<std::string> representativeArg(
+		"","rep",
+		"Group representative (default: first)",
+		false, "first", &representativeConstraint);
 
 	std::vector<std::string> allowedComparisonMethods;
 	allowedComparisonMethods.push_back("levenshtein");
 	allowedComparisonMethods.push_back("normalized-levenshtein");
+	allowedComparisonMethods.push_back("token-sort");
+	allowedComparisonMethods.push_back("cosine");
 	TCLAP::ValuesConstraint<std::string> comparisonMethodsConstraint(allowedComparisonMethods);
 
 	TCLAP::ValueArg<std::string> comparisonMethodArg(
@@ -136,6 +166,10 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 	cmd.add(ignoreNonAlphaNumericSwitch);
 	cmd.add(defaultSwitch);
 	cmd.add(threadsArg);
+	cmd.add(maskDigitsSwitch);
+	cmd.add(scoresSwitch);
+	cmd.add(bestSwitch);
+	cmd.add(representativeArg);
 	cmd.parse(argc, argv);
 
 	settings.threads = threadsArg.getValue();
@@ -159,14 +193,26 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 		std::string comparisonMethod = comparisonMethodArg.getValue();
 		if(comparisonMethod == "levenshtein") settings.comparisonMethod = Levenshtein;
 		if(comparisonMethod == "normalized-levenshtein") settings.comparisonMethod = NormalizedLevenshtein;
+		if(comparisonMethod == "token-sort") settings.comparisonMethod = TokenSort;
+		if(comparisonMethod == "cosine") settings.comparisonMethod = Cosine;
 	}
 	// The default threshold depends on the method: 3 edits is meaningless
-	// as a 0.0-1.0 ratio (everything would match), so use 0.125 there.
+	// as a 0.0-1.0 ratio (everything would match). 0.125 is the tuned
+	// normalized preset. Cosine's 0.05 is deliberately tight and not yet
+	// tuned on real data: on nginx access logs 0.2 already merged different
+	// request paths and status codes, because long shared User-Agent strings
+	// dominate the trigram vector.
 	if(distanceArg.isSet()) settings.maxDistance = distanceArg.getValue();
-	else settings.maxDistance = (settings.comparisonMethod == NormalizedLevenshtein) ? 0.125 : 3;
+	else if(settings.comparisonMethod == Levenshtein) settings.maxDistance = 3;
+	else if(settings.comparisonMethod == Cosine) settings.maxDistance = 0.05;
+	else settings.maxDistance = 0.125;
 
 	settings.showAllMatches = showAllSwitch.getValue();
 	settings.showTotals = showTotalsSwitch.getValue();
+	settings.maskDigits = maskDigitsSwitch.getValue();
+	settings.showScores = scoresSwitch.getValue();
+	settings.bestMatch = bestSwitch.getValue();
+	settings.representative = representativeArg.getValue() == "longest" ? RepLongest : RepFirst;
 
 	filename = filenameArg.getValue();
 }

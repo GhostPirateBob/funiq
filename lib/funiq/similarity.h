@@ -2,9 +2,11 @@
 #define FUNIQ_SIMILARITY_H
 
 #include <algorithm>
-#include <string>
-#include <vector>
 #include <cmath>
+#include <cstdint>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace similarity {
 
@@ -112,6 +114,56 @@ namespace similarity {
 	unsigned int boundedLevenshtein(const std::string& s1, const std::string& s2, unsigned int k) {
 		std::vector<unsigned int> scratch;
 		return boundedLevenshtein(s1, s2, k, scratch);
+	}
+
+	// Character-trigram count vector, sorted by gram, plus its Euclidean norm.
+	// Built once per line/key so each cosine comparison is a linear merge.
+	struct Profile {
+		std::vector<std::pair<uint32_t, unsigned int>> grams;
+		double norm = 0;
+	};
+
+	// Trigrams are packed exactly into 24 bits (no hashing, no collisions).
+	// A string shorter than 3 is one gram of its own, tagged above bit 24 so
+	// it can't equal a real trigram; the empty string has no grams.
+	Profile trigramProfile(const std::string& s) {
+		std::vector<uint32_t> keys;
+		const unsigned char* p = reinterpret_cast<const unsigned char*>(s.data());
+		if(s.size() >= 3) {
+			keys.reserve(s.size() - 2);
+			for(size_t i = 0; i + 2 < s.size(); i++)
+				keys.push_back((uint32_t)p[i] << 16 | (uint32_t)p[i + 1] << 8 | p[i + 2]);
+		} else if(!s.empty()) {
+			keys.push_back(1u << 24 | (uint32_t)s.size() << 16 | (uint32_t)p[0] << 8 | (s.size() > 1 ? p[1] : 0));
+		}
+		std::sort(keys.begin(), keys.end());
+		Profile profile;
+		double sumSquares = 0;
+		for(size_t i = 0; i < keys.size(); ) {
+			size_t j = i;
+			while(j < keys.size() && keys[j] == keys[i]) j++;
+			unsigned int count = j - i;
+			profile.grams.push_back(std::make_pair(keys[i], count));
+			sumSquares += (double)count * count;
+			i = j;
+		}
+		profile.norm = std::sqrt(sumSquares);
+		return profile;
+	}
+
+	// 1 - cosine similarity, in [0, 1]. Two empty profiles are identical (0);
+	// an empty and a non-empty one share nothing (1).
+	double cosineDistance(const Profile& a, const Profile& b) {
+		if(a.norm == 0 || b.norm == 0) return (a.norm == 0 && b.norm == 0) ? 0.0 : 1.0;
+		double dot = 0;
+		size_t i = 0, j = 0;
+		while(i < a.grams.size() && j < b.grams.size()) {
+			if(a.grams[i].first < b.grams[j].first) i++;
+			else if(b.grams[j].first < a.grams[i].first) j++;
+			else { dot += (double)a.grams[i].second * b.grams[j].second; i++; j++; }
+		}
+		double distance = 1.0 - dot / (a.norm * b.norm);
+		return distance < 0 ? 0.0 : distance; // rounding can dip just below 0
 	}
 }
 
