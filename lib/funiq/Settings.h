@@ -11,7 +11,8 @@ struct Settings
         comparisonMethod(Levenshtein),
 		showAllMatches(false),
 		showTotals(false),
-		ignoreNonAlphaNumeric(false)
+		ignoreNonAlphaNumeric(false),
+		threads(1)
 		{}
 
 	float maxDistance;
@@ -20,6 +21,7 @@ struct Settings
 	bool showAllMatches;
 	bool showTotals;
 	bool ignoreNonAlphaNumeric;
+	unsigned threads; // worker threads for matching; results never depend on it
 	int totalsFieldWidth;
 };
 

@@ -78,6 +78,11 @@ golden golden-norm-0.3-counts.txt -c -m normalized-levenshtein -d 0.3
 golden golden-d40-counts.txt -d 40 -c
 golden golden-norm-1-counts.txt -m normalized-levenshtein -d 1 -c
 golden golden-iI-norm-0.05-all.txt -iI -m normalized-levenshtein -d 0.05 -a
+# Thread count must never change results
+golden golden-default-preset-counts.txt --default -c -j 1
+golden golden-default-preset-counts.txt --default -c -j 8
+golden golden-iI-d3-all.txt -iI -d 3 -a --threads 3
+golden golden-norm-0.3-counts.txt -c -m normalized-levenshtein -d 0.3 -j 16
 
 # --- non-seekable file argument with progress bar active --------------------
 # Progress (stderr is a tty) pre-counts lines then rewinds; a FIFO can't rewind.

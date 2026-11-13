@@ -1,7 +1,7 @@
 # Portable across Linux (x86_64, arm64), MinGW and Cygwin. Override the
 # compiler with `make CXX=...` or the CXX environment variable.
 CXX ?= g++
-CXXFLAGS=-Wall -g -std=c++11
+CXXFLAGS=-Wall -g -std=c++11 -pthread
 OPT_FLAG=-O2
 
 ifeq ($(OS),Windows_NT)
