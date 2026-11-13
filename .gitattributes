@@ -1,0 +1,7 @@
+# Golden test outputs are compared byte-for-byte: never convert their line
+# endings (Windows checkouts default to core.autocrlf=true, which would turn
+# them into CRLF while funiq correctly writes LF).
+test/fixtures/** -text
+
+# Shell scripts must stay LF to run under bash.
+*.sh text eol=lf
