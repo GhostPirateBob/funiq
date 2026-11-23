@@ -81,6 +81,14 @@ done
 rv=$("$REF" --version | awk '{print $2}'); cv=$("$CAND" --version | awk '{print $2}')
 [ "$rv" = "$cv" ] && ok "--version $cv" || ko "--version" "'$rv' vs '$cv'"
 
+# --- --version and -h into a pipe whose reader has gone: quiet exit ---------
+name="--version and -h into a closed pipe leave stderr empty"
+exec 4> >(true)
+sleep 0.5 # let the reader exit first, so the write fails with a broken pipe
+err=$( { "$CAND" --version >&4; "$CAND" -h >&4; } 2>&1 )
+exec 4>&-
+if [ -z "$err" ]; then ok "$name"; else ko "$name" "stderr: $(printf '%s' "$err" | head -c 200)"; fi
+
 # --- broken pipe: quiet exit -------------------------------------------------
 # 3 MB of output into head -1, which exits after the first line.
 name="broken pipe into head -1 leaves stderr empty"

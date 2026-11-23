@@ -40,20 +40,21 @@ fn describe(e: &io::Error) -> String {
 
 fn main() -> ExitCode {
     match cli::parse_args(std::env::args_os().skip(1).collect()) {
-        Ok(Command::Version) => {
-            println!("{} {VERSION}", program_name());
-            ExitCode::SUCCESS
-        }
-        Ok(Command::Help) => {
-            println!("Usage: funiq-rs [options] [filename]  (the options of funiq; see funiq -h)");
-            ExitCode::SUCCESS
-        }
+        Ok(Command::Version) => say(&format!("{} {VERSION}", program_name())),
+        Ok(Command::Help) => say("Usage: funiq-rs [options] [filename]  (the options of funiq; see funiq -h)"),
         Ok(Command::Run { settings, file }) => run(settings, file),
         Err(message) => {
             eprintln!("{}: {message}", program_name());
             ExitCode::FAILURE
         }
     }
+}
+
+/// One line to stdout. Not println!, which panics when the reader has gone
+/// (`funiq-rs --version | true`); exit quietly like the C++ instead.
+fn say(line: &str) -> ExitCode {
+    let _ = writeln!(io::stdout(), "{line}");
+    ExitCode::SUCCESS
 }
 
 fn fail(what: &str, e: &io::Error) -> ExitCode {
