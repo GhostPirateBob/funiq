@@ -1,0 +1,33 @@
+-d 3
+-d 0
+-d -1
+-d 2.5
+-d 40 -c
+-iI
+-iI -d 4 -c
+-d
+-d -D -c
+-d -c -a
+-d --scores
+-m normalized-levenshtein -d 0.125 -c
+-m normalized-levenshtein -d 0.1 --scores
+-m normalized-levenshtein -d 0.3 -c
+-m normalized-levenshtein -d 1 -c
+-m token-sort
+-m token-sort -I -c
+-m token-sort -iID --scores
+-m cosine
+-m cosine -d 0.2 -c
+-m cosine -d 0.3 -iID -a
+--best -d 2 -c
+--best -d 2 --rep longest -c -a
+--rep longest -c
+--rep longest -d -a
+-D -d 0 -c
+-i -c
+-I -a
+-d 3 -j 1
+-d 3 -j 3
+-d -j 2 --scores
+--color=never -c
+--rep=longest -c

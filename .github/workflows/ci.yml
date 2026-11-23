@@ -32,10 +32,10 @@ jobs:
           exit $status
 
       - name: ShellCheck
-        run: shellcheck -S warning test/cli_test.sh
+        run: shellcheck -S warning test/cli_test.sh test/conformance.sh
 
       - name: Python scripts compile
-        run: python3 -m py_compile test/fixtures/gen_synthetic.py test/update_readme_usage.py
+        run: python3 -m py_compile test/fixtures/gen_synthetic.py test/fixtures/gen_edge_cases.py test/update_readme_usage.py
 
   test:
     strategy:

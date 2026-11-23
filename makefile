@@ -104,6 +104,9 @@ $(OUT_TEST): src/cpp/test/test.cpp $(HEADERS) | bin
 test-cpp: $(OUT) $(OUT_TEST)
 	$(OUT_TEST)
 	bash test/cli_test.sh $(OUT)
+	@# the conformance harness against itself: proves the harness runs here
+	bash test/conformance.sh $(OUT) $(OUT) > bin/conformance-cpp.log || (tail -20 bin/conformance-cpp.log; exit 1)
+	@tail -1 bin/conformance-cpp.log
 
 # Windows only: the same C++ built with Visual Studio's MSVC (/O2, static CRT)
 # as bin/funiq-msvc.exe, for comparing toolchains. The release stays MinGW.
