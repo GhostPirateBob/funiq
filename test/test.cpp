@@ -309,6 +309,42 @@ TEST_CASE( "runs that don't print members (only counts) give the same groups as 
 	}
 }
 
+TEST_CASE( "rows with the same representative keep group creation order", "[matcher]" ) {
+	// Under --best a repeated line can join a newer, closer group, so with
+	// --rep longest two groups can print the same line (found by fuzzing).
+	Settings settings;
+	settings.maxDistance = 2;
+	settings.bestMatch = true;
+	settings.representative = RepLongest;
+	settings.showTotals = true;
+	settings.showAllMatches = true;
+	Matcher small(settings);
+	for(const char* line : {"bba", "baab", "a", "aab", "aaaaa", "baab"}) small.add(line);
+	REQUIRE(showLines(small) == std::vector<std::string>{
+		"      1 aaaaa", "      3 baab\tbba\ta", "      2 baab\taab" });
+
+	// The same 6 lines in 40 blocks (120 rows: libstdc++ only insertion-sorts
+	// below 16). Each block's prefix is 4 copies of its own character, so blocks
+	// are at least 4 edits apart and never merge.
+	Matcher big(settings);
+	std::vector<std::string> prefixes;
+	for(int b = 0; b < 40; b++) {
+		std::string p(4, (char)('0' + b)); // '0'..'W': never 'a' or 'b'
+		prefixes.push_back(p);
+		for(const char* line : {"bba", "baab", "a", "aab", "aaaaa", "baab"}) big.add(p + line);
+	}
+	const std::vector<std::string> rows = showLines(big);
+	REQUIRE(rows.size() == 120);
+	for(const std::string& p : prefixes) {
+		auto at = [&](const std::string& start) {
+			for(size_t i = 0; i < rows.size(); i++) if(rows[i].compare(0, start.size(), start) == 0) return i;
+			return rows.size();
+		};
+		INFO("prefix " << p);
+		REQUIRE(at("      3 " + p + "baab\t") < at("      2 " + p + "baab\t"));
+	}
+}
+
 TEST_CASE( "--mask-digits: lines differing only in numbers become duplicates", "[tier3]" ) {
 	Settings settings;
 	settings.maxDistance = 0;
