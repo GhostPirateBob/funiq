@@ -5,7 +5,7 @@
 #include <string>
 
 // Terminal colour, decided once per stream. Conventions follow chalk /
-// yoctocolors and no-color.org, as in time-bucksy's env-manager.sh.
+// yoctocolors and no-color.org.
 namespace color {
 
 	enum Mode { Auto, Always, Never };
