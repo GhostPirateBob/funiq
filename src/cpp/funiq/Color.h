@@ -39,6 +39,18 @@ namespace color {
 	const Style Gray    = { "90", "39" };
 	const Style BoldRed = { "1;31", "22;39" };
 
+	// Appends text to out, wrapped in the style when colour is on.
+	inline void paintTo(std::string& out, bool on, const Style& style, const std::string& text) {
+		if(!on) { out += text; return; }
+		out += "\x1b[";
+		out += style.open;
+		out += 'm';
+		out += text;
+		out += "\x1b[";
+		out += style.close;
+		out += 'm';
+	}
+
 	// text wrapped in the style, or unchanged when colour is off.
 	inline std::string paint(bool on, const Style& style, const std::string& text) {
 		if(!on) return text;
