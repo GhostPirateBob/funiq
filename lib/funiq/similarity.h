@@ -22,7 +22,7 @@ namespace similarity {
 	// (one per thread) so the hot loop never allocates. Deliberately not a
 	// thread_local: MinGW static builds can run non-trivial thread_local
 	// destructors after their TLS storage is freed, corrupting the heap.
-	unsigned int boundedLevenshtein(const std::string& s1, const std::string& s2, unsigned int k,
+	inline unsigned int boundedLevenshtein(const std::string& s1, const std::string& s2, unsigned int k,
 	                                std::vector<unsigned int>& scratch) {
 		const std::string* longer = &s1;
 		const std::string* shorter = &s2;
@@ -69,18 +69,18 @@ namespace similarity {
 	}
 
 	// Convenience overload for one-off calls; allocates its own rows.
-	unsigned int boundedLevenshtein(const std::string& s1, const std::string& s2, unsigned int k) {
+	inline unsigned int boundedLevenshtein(const std::string& s1, const std::string& s2, unsigned int k) {
 		std::vector<unsigned int> scratch;
 		return boundedLevenshtein(s1, s2, k, scratch);
 	}
 
 	// Exact distance: the bounded version with a budget no pair can exceed.
-	unsigned int levenshteinDistance(const std::string& a, const std::string& b) {
+	inline unsigned int levenshteinDistance(const std::string& a, const std::string& b) {
 		return boundedLevenshtein(a, b, (unsigned int)std::max(a.size(), b.size()));
 	}
 
 	// Edits per character of the longer string: 0.0 (equal) to 1.0.
-	float normalizedLevenshtein(const std::string& a, const std::string& b) {
+	inline float normalizedLevenshtein(const std::string& a, const std::string& b) {
 		const size_t longer = std::max(a.size(), b.size());
 		return longer == 0 ? 0.0f : (float)levenshteinDistance(a, b) / (float)longer;
 	}
@@ -95,7 +95,7 @@ namespace similarity {
 	// Trigrams are packed exactly into 24 bits (no hashing, no collisions).
 	// A string shorter than 3 is one gram of its own, tagged above bit 24 so
 	// it can't equal a real trigram; the empty string has no grams.
-	Profile trigramProfile(const std::string& s) {
+	inline Profile trigramProfile(const std::string& s) {
 		std::vector<uint32_t> keys;
 		const unsigned char* p = reinterpret_cast<const unsigned char*>(s.data());
 		if(s.size() >= 3) {
@@ -122,7 +122,7 @@ namespace similarity {
 
 	// 1 - cosine similarity, in [0, 1]. Two empty profiles are identical (0);
 	// an empty and a non-empty one share nothing (1).
-	double cosineDistance(const Profile& a, const Profile& b) {
+	inline double cosineDistance(const Profile& a, const Profile& b) {
 		if(a.norm == 0 || b.norm == 0) return (a.norm == 0 && b.norm == 0) ? 0.0 : 1.0;
 		double dot = 0;
 		size_t i = 0, j = 0;

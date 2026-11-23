@@ -97,12 +97,12 @@ inline bool Matcher::lengthRulesOut(unsigned int len, unsigned int keyLen) const
 	return diff > opts.maxDistance;
 }
 
-Matcher::Matcher(const Settings& settings) : opts(settings) {}
+inline Matcher::Matcher(const Settings& settings) : opts(settings) {}
 
 // Normalize a string according to the current settings: lowercase, collapse
 // digit runs, then either sort its words (-m token-sort; with -I punctuation
 // separates words) or strip non-alphanumerics (-I). Paid once per line.
-std::string Matcher::normalize(const std::string& s) const {
+inline std::string Matcher::normalize(const std::string& s) const {
 	std::string result = s;
 	if(opts.caseInsensitive)
 		std::transform(result.begin(), result.end(), result.begin(),
@@ -134,14 +134,14 @@ std::string Matcher::normalize(const std::string& s) const {
 	return result;
 }
 
-Candidate Matcher::prepare(const std::string& line) const {
+inline Candidate Matcher::prepare(const std::string& line) const {
 	Candidate c;
 	c.normalized = normalize(line);
 	if(opts.comparisonMethod == Cosine) c.profile = similarity::trigramProfile(c.normalized);
 	return c;
 }
 
-Hit Matcher::lookupMemo(const std::string& normalizedLine) const {
+inline Hit Matcher::lookupMemo(const std::string& normalizedLine) const {
 	if(!memoEnabled()) return Hit();
 	auto it = groupOf.find(normalizedLine);
 	return it == groupOf.end() ? Hit() : it->second;
@@ -150,7 +150,7 @@ Hit Matcher::lookupMemo(const std::string& normalizedLine) const {
 // Without --best: the first group in [from, to) within the threshold. With
 // --best: the closest one, lowest index on ties. Read-only apart from `rows`,
 // so threads can call it at once as long as each passes its own buffer.
-Hit Matcher::findMatch(const Candidate& c, size_t from, size_t to,
+inline Hit Matcher::findMatch(const Candidate& c, size_t from, size_t to,
                        std::vector<unsigned int>& rows) const {
 	const unsigned int len = c.normalized.size();
 	Hit best;
@@ -166,7 +166,7 @@ Hit Matcher::findMatch(const Candidate& c, size_t from, size_t to,
 }
 
 // Adds the line to the hit group, or starts a new group if there is none.
-void Matcher::place(const std::string& line, Candidate& c, Hit hit) {
+inline void Matcher::place(const std::string& line, Candidate& c, Hit hit) {
 	if(memoEnabled())
 		groupOf.emplace(c.normalized, hit.group == NO_GROUP ? Hit(groups.size(), 0) : hit);
 	if(hit.group != NO_GROUP) {
@@ -185,7 +185,7 @@ void Matcher::place(const std::string& line, Candidate& c, Hit hit) {
 }
 
 // A line joins only one group, so counts sum to the number of lines.
-void Matcher::add(const std::string& line) {
+inline void Matcher::add(const std::string& line) {
 	Candidate c = prepare(line);
 	Hit hit = lookupMemo(c.normalized);
 	if(hit.group == NO_GROUP) hit = findMatch(c, 0, groups.size(), scratch);
@@ -199,7 +199,7 @@ void Matcher::add(const std::string& line) {
 //     (all with higher indices). First-match: a phase-1 hit already wins.
 //     --best: a new group wins only if strictly closer (ties go to the
 //     lower index, as in the serial scan).
-void Matcher::addBatch(const std::vector<std::string>& lines, unsigned threads) {
+inline void Matcher::addBatch(const std::vector<std::string>& lines, unsigned threads) {
 	const size_t frozen = groups.size();
 	std::vector<Candidate> candidates(lines.size());
 	std::vector<Hit> hit(lines.size());
@@ -234,14 +234,14 @@ void Matcher::addBatch(const std::vector<std::string>& lines, unsigned threads) 
 	}
 }
 
-std::string Matcher::formatScore(double score) const {
+inline std::string Matcher::formatScore(double score) const {
 	std::ostringstream out;
 	if(opts.comparisonMethod == Levenshtein) out << (unsigned long)score;
 	else out << std::fixed << std::setprecision(3) << score;
 	return out.str();
 }
 
-void Matcher::show(std::ostream* output) const {
+inline void Matcher::show(std::ostream* output) const {
 	// Each group is printed as its representative (first line seen, or the
 	// longest member with --rep longest; ties go to the earlier line).
 	struct Row { const MatchGroup* group; size_t rep; };
@@ -302,7 +302,7 @@ void Matcher::show(std::ostream* output) const {
 // the distance only up to k, so far-away keys are rejected without the full
 // O(n*m) DP; the final comparisons are the same expressions as an unbounded
 // computation, so results are identical.
-bool Matcher::distanceTo(const Candidate& c, size_t i, std::vector<unsigned int>& rows,
+inline bool Matcher::distanceTo(const Candidate& c, size_t i, std::vector<unsigned int>& rows,
                          double& score) const {
 	const float d = opts.maxDistance;
 	if(!(d >= 0)) return false; // negative or NaN: no distance qualifies
