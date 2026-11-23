@@ -4,6 +4,9 @@ Release notes for funiq, newest first. Versions follow [Semantic Versioning](htt
 
 ## [1.4.0] - 2026-11-24
 
+CI no longer runs on macOS: GitHub's macOS runners often never picked the job up, which failed
+every run. `make all` still builds and tests natively on macOS.
+
 ### Performance
 - A byte-histogram prefilter skips pairs that can't match before any Levenshtein kernel runs:
   128 saturating byte counts per line, compared with SSE2 (x86-64) or NEON (arm64), give a lower
