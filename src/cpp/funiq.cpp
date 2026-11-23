@@ -210,6 +210,7 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 	TCLAP::Arg* const all[] = { &inputFile, &method, &threshold, &workers, &representative, &colorWhen,
 		&foldCase, &dropPunct, &maskDigits, &counts, &everyMember, &scores, &closest, &preset };
 	for(TCLAP::Arg* arg : all) cmd.add(arg);
+	const std::vector<std::string> rewritten = args; // parse() consumes args
 	cmd.parse(args);
 
 	// Errors found after parsing, reported like TCLAP's own and with its exit.
@@ -224,6 +225,16 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 	const std::string& file = inputFile.getValue();
 	if(file.size() > 1 && file[0] == '-' && std::find(options.begin(), options.end(), file) != options.end())
 		reject("Couldn't find match for argument", file);
+	// TCLAP reads an empty number as no value at all and keeps the default
+	// (so `--distance= -m cosine` ran at 3 and merged every line), and skips
+	// leading whitespace; both are typos, not numbers.
+	for(size_t i = 1; i + 1 < rewritten.size() && rewritten[i] != "--"; i++) {
+		const std::string& opt = rewritten[i];
+		const std::string& value = rewritten[i + 1];
+		if((opt == "-d" || opt == "--distance" || opt == "-j" || opt == "--threads")
+		   && (value.empty() || std::isspace((unsigned char)value[0])))
+			reject("Couldn't read argument value from string '" + value + "'", opt);
+	}
 	if(workers.getValue() < 0)
 		reject("Value '" + std::to_string(workers.getValue()) + "' does not meet constraint: 0 or more", workers.toString());
 

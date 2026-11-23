@@ -158,6 +158,16 @@ if [ "$got" = "$want" ]; then ok "$name"; else ko "$name" "regenerate the README
 
 [ "$(printf 'x\n' | "$FUNIQ" --rep sideways >/dev/null 2>&1; echo $?)" != 0 ] && ok "--rep sideways exits non-zero" || ko "--rep sideways exits non-zero"
 
+# An empty or space-led number is an error: TCLAP read "" as no value and
+# kept the default, so `--distance= -m cosine` ran at threshold 3 and merged
+# every line.
+for bad in "--distance=" "--threads=" "-j|" "--distance| 1" "-j| 2"; do
+	name="numeric value '${bad#*[=|]}' for ${bad%%[=|]*} is an error"
+	if [ "${bad#*|}" != "$bad" ]; then set -- "${bad%%|*}" "${bad#*|}"; else set -- "$bad"; fi
+	if printf 'abc\nabd\nxyz\n' | "$FUNIQ" "$@" -m cosine >/dev/null 2>&1; then ko "$name"; else ok "$name"; fi
+done
+set --
+
 # An unknown option is an argument error, not a filename (TCLAP gives any
 # unmatched argument to the filename). After "--" a leading dash is a name.
 for bad in "-x" "--nope" "--=x"; do

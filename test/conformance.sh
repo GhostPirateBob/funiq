@@ -69,6 +69,14 @@ for bad in "-d inf" "-d nan" "--rep sideways" "-x" "-j 99999999999"; do
 	if [ $rr -ne 0 ] && [ $cr -ne 0 ]; then ok "rejects $bad"; else ko "rejects $bad" "exit $rr vs $cr"; fi
 done
 
+# empty or space-led numbers ("opt|value" splits one argument pair)
+for bad in "--distance=" "--threads=" "-j|" "--distance| 1" "-j| 2"; do
+	if [ "${bad#*|}" != "$bad" ]; then pair=("${bad%%|*}" "${bad#*|}"); else pair=("$bad"); fi
+	"$REF" "${pair[@]}" "$SYNTH" >/dev/null 2>&1; rr=$?
+	"$CAND" "${pair[@]}" "$SYNTH" >/dev/null 2>&1; cr=$?
+	if [ $rr -ne 0 ] && [ $cr -ne 0 ]; then ok "rejects '$bad'"; else ko "rejects '$bad'" "exit $rr vs $cr"; fi
+done
+
 # --- version -------------------------------------------------------------------
 rv=$("$REF" --version | awk '{print $2}'); cv=$("$CAND" --version | awk '{print $2}')
 [ "$rv" = "$cv" ] && ok "--version $cv" || ko "--version" "'$rv' vs '$cv'"
