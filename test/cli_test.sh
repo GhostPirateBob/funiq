@@ -59,6 +59,20 @@ got=$(printf 'a\r\nb\r\n' | "$FUNIQ" -d 0 | od -An -c | tr -d ' \n')
 exp=$(printf "$want" | od -An -c | tr -d ' \n')
 if [ "$got" = "$exp" ]; then ok "$name"; else ko "$name" "got $got, want $exp"; fi
 
+# Input is read in 1 MiB chunks: lines may span chunks, and the last line
+# may lack its \n. Same result from a file, a redirect and a pipe.
+name="a 3 MB line, an empty line and an unterminated last line survive (file, <, pipe)"
+{ head -c 3000000 /dev/zero | tr '\0' x; printf '\nabc\n\nlast'; } > "$TMP/long.txt"
+want=$(printf '%s\n' "1 0" "1 3" "1 4" "1 3000000")
+lens() { awk '{ print $1, length($2) }'; }
+g1=$("$FUNIQ" -d 0 -c "$TMP/long.txt" | lens); g2=$("$FUNIQ" -d 0 -c < "$TMP/long.txt" | lens)
+g3=$(cat "$TMP/long.txt" | "$FUNIQ" -d 0 -c | lens)
+if [ "$g1" = "$want" ] && [ "$g2" = "$want" ] && [ "$g3" = "$want" ]; then ok "$name"; else ko "$name" "file: $g1 / <: $g2 / pipe: $g3"; fi
+
+name="a directory argument is an error, not empty output"
+err=$("$FUNIQ" "$TMP" 2>&1 >/dev/null); rc=$?
+if [ $rc -ne 0 ] && [ -n "$err" ]; then ok "$name"; else ko "$name" "rc=$rc stderr='$err'"; fi
+
 # --- normalized method gets a sane default threshold ------------------------
 # Without -d, the old default of 3 made every normalized comparison match.
 name="-m normalized-levenshtein without -d does not collapse distinct lines"

@@ -7,7 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <fstream>
+#include <sys/stat.h>
 #include <iomanip>
 #include <iostream>
 #include <map>
@@ -267,21 +267,90 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 
 // Read from file if a filename is provided, otherwise read from stdin.
 // Returns a file stream if applicable, leaving the caller to manage its lifetime.
-// One input line. Input is read in binary mode everywhere; on Windows a
-// trailing \r is dropped, exactly what text mode's CRLF -> LF did before.
-// Elsewhere the \r stays part of the line, like uniq.
-static bool readLine(std::istream& in, std::string& line) {
-	if(!getline(in, line)) return false;
+// Input and output go through 1 MiB buffers. iostreams buffer only BUFSIZ
+// bytes, which is 512 on MinGW: a read or write system call every 512 bytes.
+static const size_t IO_BUFFER = 1 << 20;
+
+// Splits input into lines with memchr over large binary reads. Binary mode
+// matters on Windows, where text mode ends input at the first 0x1A (Ctrl-Z)
+// byte; a trailing \r is dropped there instead, exactly what text mode's
+// CRLF -> LF did. Elsewhere the \r stays part of the line, like uniq.
+class LineReader {
+public:
+	explicit LineReader(std::FILE* f) : file(f), buf(IO_BUFFER) {}
+	// The next line without its '\n'. Like getline, a last line without a
+	// '\n' still counts. False at the end of the input.
+	bool next(std::string& line) {
+		line.clear();
+		for(bool partial = false; ; partial = true) {
+			if(pos == end) {
+				end = std::fread(&buf[0], 1, buf.size(), file);
+				pos = 0;
+				if(end == 0) {
+					if(!partial) return false;
+					break;
+				}
+			}
+			const char* start = &buf[pos];
+			const char* nl = static_cast<const char*>(std::memchr(start, '\n', end - pos));
+			const size_t n = nl ? (size_t)(nl - start) : end - pos;
+			line.append(start, n);
+			pos += n + (nl ? 1 : 0);
+			consumed += n + (nl ? 1 : 0);
+			if(nl) break;
+		}
 #ifdef _WIN32
-	if(!line.empty() && line[line.size() - 1] == '\r') line.erase(line.size() - 1);
+		if(!line.empty() && line[line.size() - 1] == '\r') line.erase(line.size() - 1);
 #endif
-	return true;
+		return true;
+	}
+	unsigned long long bytesRead() const { return consumed; }
+	bool failed() const { return std::ferror(file) != 0; }
+private:
+	std::FILE* file;
+	std::vector<char> buf;
+	size_t pos = 0, end = 0;
+	unsigned long long consumed = 0;
+};
+
+// The input's size in bytes when it is a regular file (also for `< file`),
+// for the progress percentage; 0 for pipes, FIFOs and terminals.
+static unsigned long long regularFileSize(std::FILE* f) {
+#ifdef _WIN32
+	struct _stat64 st;
+	return _fstat64(_fileno(f), &st) == 0 && (st.st_mode & _S_IFMT) == _S_IFREG ? st.st_size : 0;
+#else
+	struct stat st;
+	return fstat(fileno(f), &st) == 0 && S_ISREG(st.st_mode) ? st.st_size : 0;
+#endif
 }
 
-// Binary mode: Windows text mode ends input at the first 0x1A (Ctrl-Z) byte.
-std::ifstream getFileInput(const std::string& filename) {
-	return std::ifstream(filename.c_str(), std::ios::in | std::ios::binary);
-}
+// A std::streambuf that writes to a FILE through a 1 MiB buffer, so the
+// results reach stdout in a few large writes.
+class FileOutBuf : public std::streambuf {
+public:
+	explicit FileOutBuf(std::FILE* f) : file(f), buf(IO_BUFFER) { setp(&buf[0], &buf[0] + buf.size()); }
+	~FileOutBuf() { flushBuffer(); }
+protected:
+	int_type overflow(int_type c) override {
+		if(!flushBuffer()) return traits_type::eof();
+		if(!traits_type::eq_int_type(c, traits_type::eof())) {
+			*pptr() = traits_type::to_char_type(c);
+			pbump(1);
+		}
+		return traits_type::not_eof(c);
+	}
+	int sync() override { return flushBuffer() && std::fflush(file) == 0 ? 0 : -1; }
+private:
+	std::FILE* file;
+	std::vector<char> buf;
+	bool flushBuffer() {
+		const size_t n = pptr() - pbase();
+		const bool ok = n == 0 || std::fwrite(pbase(), 1, n, file) == n;
+		setp(&buf[0], &buf[0] + buf.size());
+		return ok;
+	}
+};
 
 int main(int argc, char* argv[]) {
 
@@ -294,14 +363,9 @@ int main(int argc, char* argv[]) {
 	// a stray \r into downstream sed/awk/bat pipelines. Emit LF like uniq.
 	_setmode(_fileno(stdout), _O_BINARY);
 	// Text-mode stdin ends input at the first 0x1A (Ctrl-Z) byte, which
-	// silently dropped the rest of a log. Read bytes; see readLine for CRLF.
+	// silently dropped the rest of a log. Read bytes; see LineReader for CRLF.
 	_setmode(_fileno(stdin), _O_BINARY);
 #endif
-
-	// Disable C/C++ I/O synchronization for faster stdin/stdout throughput
-	// when reading large inputs or piping output.
-	std::ios_base::sync_with_stdio(false);
-	std::cin.tie(nullptr);
 
 	// Colour is decided once per stream (inside a pipe stdout isn't a
 	// terminal, so asking per write would be wrong anyway).
@@ -319,65 +383,54 @@ int main(int argc, char* argv[]) {
 		settings.color = wantColor(colorMode, stdoutTerminal);
 
 		Matcher matcher(settings);
-		// Use file stream if filename provided, otherwise read from stdin
-		std::ifstream fileStream;
+		std::FILE* input = stdin;
 		if(!filename.empty()) {
-			fileStream = getFileInput(filename);
-			if(!fileStream) {
+			input = std::fopen(filename.c_str(), "rb");
+			if(!input) {
 				std::cerr << color::paint(g_errColor, color::BoldRed, "funiq:") << " "
 				          << filename << ": " << std::strerror(errno) << "\n";
 				return 1;
 			}
 		}
-		std::istream& inputStream = filename.empty() ? std::cin : fileStream;
+		LineReader reader(input);
 
 		// Show progress on stderr when it's a terminal. This keeps the
 		// progress indicator visible even when stdout is piped or
 		// redirected (e.g. funiq file.txt | tee out.txt).
-		// isTerminal, not isatty: on Windows _isatty is also true for NUL, and
-		// `2>NUL` would pre-count the whole file for a bar nobody sees.
-		bool showProgress = stderrTerminal;
+		// isTerminal, not isatty: on Windows _isatty is also true for NUL.
+		const bool showProgress = stderrTerminal;
 		unsigned long lineCount = 0;
-		unsigned long totalLines = 0;
-
-		// For file input, count total lines first so we can show a
-		// percentage progress bar. Seek back to the start afterwards.
-		// Only for seekable files: a FIFO/pipe (e.g. funiq <(zcat x.gz))
-		// can't rewind, so pre-counting would consume the whole input.
-		if(showProgress && !filename.empty() && fileStream.tellg() != std::streampos(-1)) {
-			std::string tmp;
-			while(getline(inputStream, tmp)) totalLines++;
-			fileStream.clear();
-			fileStream.seekg(0);
-		}
+		// The percentage comes from bytes read out of the file's size, so the
+		// input is read once (it used to be read twice to count lines first).
+		// Pipes and FIFOs have no size and show a line count only.
+		const unsigned long long totalBytes = showProgress ? regularFileSize(input) : 0;
 
 		auto startTime = std::chrono::steady_clock::now();
+		auto lastDraw = startTime;
 
-		auto drawProgress = [&]() {
+		auto drawProgress = [&](bool done) {
 				auto now = std::chrono::steady_clock::now();
 				double elapsed = std::chrono::duration<double>(now - startTime).count();
 				double rate = (elapsed > 0) ? lineCount / elapsed : 0;
 
 				const bool c = g_errColor;
 				std::cerr << "\r" << color::paint(c, color::Dim, "Processing:") << " ";
-				if(totalLines > 0) {
-					// File mode: show percentage bar
-					int pct = (int)(lineCount * 100 / totalLines);
-					int barWidth = 30;
-					int filled = pct * barWidth / 100;
+				if(totalBytes > 0) {
+					const int pct = done ? 100
+						: (int)std::min<unsigned long long>(100, reader.bytesRead() * 100 / totalBytes);
+					const int barWidth = 30;
+					const int filled = pct * barWidth / 100;
 					std::string bar;
 					for(int b = 0; b < barWidth; b++)
 						bar += (b < filled ? "\xe2\x96\x88" : " ");
 					std::cerr << color::paint(c, color::Bold, std::to_string(pct) + "%")
-					          << "|" << color::paint(c, color::Cyan, bar) << "| "
-					          << lineCount << "/" << totalLines;
-				} else {
-					// Stdin mode: show line count only
-					std::cerr << lineCount << " lines";
+					          << "|" << color::paint(c, done ? color::Green : color::Cyan, bar) << "| ";
 				}
+				std::cerr << lineCount << " lines";
 				std::ostringstream rateText;
 				rateText << "[" << std::fixed << std::setprecision(1) << rate << " lines/s]";
-				std::cerr << " " << color::paint(c, color::Dim, rateText.str()) << "  " << std::flush;
+				std::cerr << " " << color::paint(c, color::Dim, rateText.str()) << (done ? "  \n" : "  ")
+				          << std::flush;
 		};
 
 		// Lines are matched in batches so each batch's scan against existing
@@ -389,45 +442,42 @@ int main(int argc, char* argv[]) {
 		std::vector<std::string> batch;
 		batch.reserve(BATCH_SIZE);
 		for(std::string line; ; ) {
-			bool more = readLine(inputStream, line);
+			bool more = reader.next(line);
 			if(more) batch.push_back(line);
 			if(!batch.empty() && (batch.size() == BATCH_SIZE || !more)) {
 				matcher.addBatch(batch, settings.threads);
 				lineCount += batch.size();
 				batch.clear();
 				// Small inputs finish before a bar would mean anything, and the
-				// final newline below is only printed from 50 lines on.
-				if(showProgress && lineCount >= 50) drawProgress();
+				// final newline below is only printed from 50 lines on. At most
+				// 10 redraws a second: memo-heavy input runs thousands of
+				// batches a second, and every redraw is a terminal write.
+				if(showProgress && lineCount >= 50) {
+					auto now = std::chrono::steady_clock::now();
+					if(now - lastDraw >= std::chrono::milliseconds(100)) {
+						drawProgress(false);
+						lastDraw = now;
+					}
+				}
 			}
 			if(!more) break;
 		}
-
-		// Clear the progress line before outputting results
-		if(showProgress && lineCount >= 50) {
-			auto now = std::chrono::steady_clock::now();
-			double elapsed = std::chrono::duration<double>(now - startTime).count();
-			double rate = (elapsed > 0) ? lineCount / elapsed : 0;
-
-			// Show completed state briefly
-			const bool c = g_errColor;
-			std::cerr << "\r" << color::paint(c, color::Dim, "Processing:") << " ";
-			if(totalLines > 0) {
-				std::string bar;
-				for(int b = 0; b < 30; b++) bar += "\xe2\x96\x88";
-				std::cerr << color::paint(c, color::Bold, "100%") << "|"
-				          << color::paint(c, color::Green, bar) << "| " << lineCount << "/" << totalLines;
-			} else {
-				std::cerr << lineCount << " lines";
-			}
-			std::ostringstream rateText;
-			rateText << "[" << std::fixed << std::setprecision(1) << rate << " lines/s]";
-			std::cerr << " " << color::paint(c, color::Dim, rateText.str()) << "  \n" << std::flush;
+		if(reader.failed()) { // e.g. a directory on Linux: fopen works, reading doesn't
+			std::cerr << color::paint(g_errColor, color::BoldRed, "funiq:") << " "
+			          << (filename.empty() ? "stdin" : filename) << ": " << std::strerror(errno) << "\n";
+			return 1;
 		}
+		if(input != stdin) std::fclose(input);
 
-		matcher.show(&std::cout);
-		// Explicitly flush stdout so downstream programs in a pipe chain
-		// (e.g. funiq ... | bat) receive all output before we exit.
-		std::cout.flush();
+		// The completed bar, ending the progress line before the results.
+		if(showProgress && lineCount >= 50) drawProgress(true);
+
+		// Flushed before exit so downstream programs in a pipe chain
+		// (e.g. funiq ... | bat) receive all output.
+		FileOutBuf outBuf(stdout);
+		std::ostream out(&outBuf);
+		matcher.show(&out);
+		out.flush();
 
 	} catch (TCLAP::ArgException& e) {
 		std::cerr << color::paint(g_errColor, color::BoldRed, "funiq:") << " "
