@@ -5,3 +5,6 @@ test/fixtures/** -text
 
 # Shell scripts must stay LF to run under bash.
 *.sh text eol=lf
+
+# cmd.exe can misread labels and goto targets in LF batch files.
+*.bat text eol=crlf

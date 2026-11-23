@@ -6,14 +6,16 @@ funiq groups near-duplicate lines. It reads every line, assigns each to a group,
 
 | file | role |
 |---|---|
-| `src/funiq.cpp` | CLI: argument rewriting and parsing, colour decisions, input batching, progress bar, exit codes |
-| `lib/funiq/Settings.h` | every option that shapes matching and output, with plain-run defaults |
-| `lib/funiq/Matcher.h` | normalisation, grouping (serial and threaded), output |
-| `lib/funiq/WorkerPool.h` | the threads `addBatch` runs on, started once |
-| `lib/funiq/similarity.h` | distance functions: bounded Levenshtein, trigram profiles, cosine distance |
-| `lib/funiq/Color.h` | colour decision (`color::want`) and SGR styling (`color::paint`) |
+| `src/cpp/funiq.cpp` | CLI: argument rewriting and parsing, colour decisions, input batching, progress bar, exit codes |
+| `src/cpp/funiq/Settings.h` | every option that shapes matching and output, with plain-run defaults |
+| `src/cpp/funiq/Matcher.h` | normalisation, grouping (serial and threaded), output |
+| `src/cpp/funiq/WorkerPool.h` | the threads `addBatch` runs on, started once |
+| `src/cpp/funiq/similarity.h` | distance functions: bounded Levenshtein, trigram profiles, cosine distance |
+| `src/cpp/funiq/Color.h` | colour decision (`color::want`) and SGR styling (`color::paint`) |
+| `src/cpp/test/test.cpp` | C++ unit tests |
+| `src/rust/`, `src/go/` | the Rust and Go ports, for benchmarking (same algorithm, byte-identical output) |
 | `lib/tclap/`, `lib/catch/` | vendored TCLAP (argument parsing) and Catch2 v2 (tests) |
-| `test/` | unit tests, CLI tests, golden fixtures (see BUILDING.md) |
+| `test/` | CLI tests, golden fixtures, the cross-language conformance harness (see BUILDING.md) |
 
 ## Pipeline
 

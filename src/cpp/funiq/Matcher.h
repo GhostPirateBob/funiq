@@ -273,8 +273,10 @@ inline void Matcher::show(std::ostream* output) const {
 	for(const auto& group : groups)
 		rows.push_back(longest ? Row{&group, &group.longest, group.longestAt} : Row{&group, &group.key, 0});
 	// Sort alphabetically by representative, like GNU uniq on sorted input.
-	// Sort rows, not the groups, so groupOf's indices stay valid.
-	std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return *a.rep < *b.rep; });
+	// Sort rows, not the groups, so groupOf's indices stay valid. Stable, so
+	// groups with the same representative (possible with --best --rep
+	// longest) keep creation order on every standard library.
+	std::stable_sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return *a.rep < *b.rep; });
 
 	// Colour adds SGR codes around fields and changes nothing else, so the
 	// output with codes stripped is byte-identical to the plain output.

@@ -123,6 +123,26 @@ time bin/funiq -d 3 bench.log > new.txt
 cmp old.txt new.txt          # on Windows the original writes CRLF: tr -d '\r' < old.txt | cmp - new.txt
 ```
 
+## Rust and Go ports
+
+`src/rust` and `src/go` are ports of funiq for comparing languages: the same algorithm (bit-parallel Levenshtein, memo, two-phase threaded batches) with **byte-identical output**. `test/conformance.sh` checks each port against the C++ binary on 82 cases, on Linux, Windows and macOS in CI. The C++ binary is the release; the ports are not shipped.
+
+On a quiet Linux arm64 VM (4 cores; [full results](bench/results/2026-11-24-linux-aarch64.md)), 24k or 240k synthetic log lines, output checked identical before timing:
+
+| case | C++ (g++ 13) | Rust 1.90 | Go 1.25 |
+|---|---|---|---|
+| `-d 3`, 1 thread | 3.38 s | **2.87 s** | 3.22 s |
+| `-d` (preset), 1 thread | **2.01 s** | 2.22 s | 2.26 s |
+| `-d`, all cores | **579 ms** | 654 ms | 642 ms |
+| `--best -d 3`, 1 thread | 4.30 s | **3.68 s** | 4.19 s |
+| logs `-d -D`, 1 thread (240k) | 492 ms | **222 ms** | 317 ms |
+| 27 MB of `-a` output | 664 ms | **326 ms** | 407 ms |
+| peak memory, logs `-c` | 5.2 MB | **2.8 MB** | 7.8 MB |
+
+On the distance kernels the three are within about 10–15% of each other (C++ leads the preset's bit-parallel path, Rust the plain Levenshtein one). The large gaps are per-line overhead: on memo-heavy logs and large output, where each line is a hash lookup and a copy, Rust is about 2× and Go about 1.5× faster than C++, which leaves room in the C++ `normalize`, hash map and `ostream` output. [Windows results](bench/results/2026-11-24-windows-x86_64.md) (MinGW and MSVC C++, Rust, Go) show the same pattern, with ±10–20% noise from a laptop.
+
+Run it yourself with `make bench` (needs hyperfine; `make build-cpp-msvc` first to include an MSVC build on Windows).
+
 ## Usage
 
 <!-- usage:start (generated from `funiq -h`; test/cli_test.sh checks it) -->
@@ -171,6 +191,7 @@ Examples:
 ## More
 
 - [BUILDING.md](BUILDING.md): toolchains, make targets, installing, tests, CI
+- [bench/results](bench/results): C++, Rust and Go benchmark results
 - [ARCHITECTURE.md](ARCHITECTURE.md): how matching works and why it is fast
 - [CHANGELOG.md](CHANGELOG.md): release notes
 - [TODO.md](TODO.md): ideas and possible next steps
