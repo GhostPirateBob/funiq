@@ -40,6 +40,9 @@ static const size_t NO_GROUP = (size_t)-1;
 struct Candidate {
 	std::string normalized;
 	similarity::Profile profile;
+	// set by prepareScan, only when a scan needs it (not on memo hits); points
+	// into the matcher's reused storage, so a line carries 8 bytes, not 128
+	const similarity::ByteHistogram* histogram = nullptr;
 };
 
 // The group a line joins (NO_GROUP: start a new one) and its distance.
@@ -68,6 +71,9 @@ private:
 	// created later have higher indices, so a repeat line's first match can
 	// never change. Not under --best, where a later group can be closer.
 	std::unordered_map<std::string, Hit> groupOf;
+	// keyHistograms[i]: groups[i].normalizedKey's byte counts, for the
+	// prefilter (empty for -m cosine, which has no edit budget)
+	std::vector<similarity::ByteHistogram> keyHistograms;
 	// keyLengths[i] == groups[i].normalizedKey.size(), stored contiguously
 	// so the length pre-check scans one compact array instead of the groups.
 	std::vector<unsigned int> keyLengths;
@@ -86,6 +92,15 @@ private:
 	// A negative (or NaN) threshold matches nothing, not even an identical
 	// line, so repeats must not be memoised into one group there.
 	bool memoEnabled() const { return opts.maxDistance >= 0 && !opts.bestMatch; }
+	bool usesHistogram() const { return opts.comparisonMethod != Cosine; }
+	// before a scan: the candidate's histogram, built into `storage`
+	void prepareScan(Candidate& c, similarity::ByteHistogram& storage) const {
+		if(!usesHistogram()) return;
+		similarity::buildHistogram(c.normalized, storage);
+		c.histogram = &storage;
+	}
+	similarity::ByteHistogram addHistogram;                 // add()'s histogram
+	std::vector<similarity::ByteHistogram> batchHistograms; // addBatch(): one per line, reused
 	Hit lookupMemo(const std::string& normalizedLine) const;
 	Hit findMatch(const Candidate& c, size_t from, size_t to, similarity::Scratch& scratch) const;
 	// memoised: the hit came from groupOf, so there is nothing to insert
@@ -215,6 +230,7 @@ inline void Matcher::place(std::string line, Candidate& c, Hit hit, bool memoise
 	}
 	group.key = std::move(line);
 	keyLengths.push_back(c.normalized.size());
+	if(usesHistogram()) keyHistograms.push_back(*c.histogram);
 	group.normalizedKey = std::move(c.normalized);
 	group.profile = std::move(c.profile);
 	group.count = 1;
@@ -226,7 +242,10 @@ inline void Matcher::add(std::string line) {
 	Candidate c = prepare(line);
 	Hit hit = lookupMemo(c.normalized);
 	const bool memoised = hit.group != NO_GROUP;
-	if(!memoised) hit = findMatch(c, 0, groups.size(), scratch);
+	if(!memoised) {
+		prepareScan(c, addHistogram);
+		hit = findMatch(c, 0, groups.size(), scratch);
+	}
 	place(std::move(line), c, hit, memoised);
 }
 
@@ -242,6 +261,7 @@ inline void Matcher::addBatch(std::vector<std::string> lines, unsigned threads) 
 	std::vector<Candidate> candidates(lines.size());
 	std::vector<Hit> hit(lines.size());
 	std::vector<char> memoised(lines.size()); // hit[i] came from groupOf
+	if(batchHistograms.size() < lines.size()) batchHistograms.resize(lines.size());
 
 	const unsigned workers = std::max(1u, threads);
 	if(!pool || pool->size() != workers) {
@@ -255,7 +275,11 @@ inline void Matcher::addBatch(std::vector<std::string> lines, unsigned threads) 
 			candidates[i] = prepare(lines[i]);
 			Hit memo = lookupMemo(candidates[i].normalized);
 			memoised[i] = memo.group != NO_GROUP;
-			hit[i] = memoised[i] ? memo : findMatch(candidates[i], 0, frozen, own);
+			if(memoised[i]) hit[i] = memo;
+			else {
+				prepareScan(candidates[i], batchHistograms[i]); // phase 2 reuses it
+				hit[i] = findMatch(candidates[i], 0, frozen, own);
+			}
 		}
 	});
 
@@ -365,6 +389,7 @@ inline bool Matcher::distanceTo(const Candidate& c, size_t i, similarity::Scratc
 		// the exact float test below still has the final say.
 		double budget = (double)d * maxLen;
 		unsigned int k = budget >= maxLen ? maxLen : (unsigned int)budget + 1;
+		if(similarity::histogramBound(*c.histogram, keyHistograms[i]) > k) return false;
 		unsigned int dist = similarity::boundedLevenshtein(s1, s2, k, scratch);
 		float ratio = (float)dist / (float)maxLen;
 		score = ratio;
@@ -372,6 +397,7 @@ inline bool Matcher::distanceTo(const Candidate& c, size_t i, similarity::Scratc
 	}
 
 	unsigned int k = d >= maxLen ? maxLen : (unsigned int)d;
+	if(similarity::histogramBound(*c.histogram, keyHistograms[i]) > k) return false;
 	unsigned int dist = similarity::boundedLevenshtein(s1, s2, k, scratch);
 	score = dist;
 	return dist <= d;

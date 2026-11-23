@@ -10,6 +10,16 @@
 #include <utility>
 #include <vector>
 
+// FUNIQ_HISTOGRAM_SCALAR forces the plain loop (the unit tests build it too)
+#if defined(FUNIQ_HISTOGRAM_SCALAR)
+#elif defined(__SSE2__) || defined(_M_X64) || defined(_M_AMD64)
+#include <emmintrin.h>
+#define FUNIQ_HISTOGRAM_SSE2 1
+#elif defined(__aarch64__) || defined(_M_ARM64)
+#include <arm_neon.h>
+#define FUNIQ_HISTOGRAM_NEON 1
+#endif
+
 namespace similarity {
 
 	// The bit-parallel kernels win from k = 1 (measured: -d 3 on 24k log lines
@@ -262,6 +272,57 @@ namespace similarity {
 		}
 		double distance = 1.0 - dot / (a.norm * b.norm);
 		return distance < 0 ? 0.0 : distance; // rounding can dip just below 0
+	}
+
+	// Byte counts of a string, bucketed by c & 127 and saturating at 255: a
+	// cheap lower bound on the edit distance, so most non-matching pairs are
+	// rejected before a kernel runs (24k log lines: 99.7% of -d 3 kernel calls,
+	// 94% of the preset's).
+	struct ByteHistogram { unsigned char count[128]; };
+
+	inline void buildHistogram(const std::string& s, ByteHistogram& h) {
+		std::fill(h.count, h.count + 128, (unsigned char)0);
+		for(unsigned char c : s) {
+			unsigned char& n = h.count[c & 127];
+			if(n != 255) n++;
+		}
+	}
+
+	// max(P, N), P and N the surplus counts on either side. Each edit changes
+	// P by at most one and N by at most one (an insertion or deletion moves one
+	// count, a substitution one down and one up), so at least max(P, N) edits
+	// are needed. Folding buckets or saturating counts only lowers P and N, so
+	// it stays a lower bound.
+	inline unsigned int histogramBound(const ByteHistogram& a, const ByteHistogram& b) {
+		unsigned int P, N;
+#if defined(FUNIQ_HISTOGRAM_SSE2)
+		const __m128i zero = _mm_setzero_si128();
+		__m128i p = zero, n = zero;
+		for(int i = 0; i < 128; i += 16) {
+			__m128i x = _mm_loadu_si128((const __m128i*)(a.count + i));
+			__m128i y = _mm_loadu_si128((const __m128i*)(b.count + i));
+			p = _mm_add_epi64(p, _mm_sad_epu8(_mm_subs_epu8(x, y), zero)); // sum of max(x - y, 0)
+			n = _mm_add_epi64(n, _mm_sad_epu8(_mm_subs_epu8(y, x), zero));
+		}
+		P = (unsigned int)(_mm_cvtsi128_si32(p) + _mm_cvtsi128_si32(_mm_srli_si128(p, 8)));
+		N = (unsigned int)(_mm_cvtsi128_si32(n) + _mm_cvtsi128_si32(_mm_srli_si128(n, 8)));
+#elif defined(FUNIQ_HISTOGRAM_NEON)
+		uint16x8_t p = vdupq_n_u16(0), n = vdupq_n_u16(0);
+		for(int i = 0; i < 128; i += 16) {
+			uint8x16_t x = vld1q_u8(a.count + i), y = vld1q_u8(b.count + i);
+			p = vpadalq_u8(p, vqsubq_u8(x, y)); // at most 8 * 2 * 255 per lane: fits
+			n = vpadalq_u8(n, vqsubq_u8(y, x));
+		}
+		P = vaddlvq_u16(p);
+		N = vaddlvq_u16(n);
+#else
+		P = N = 0;
+		for(int i = 0; i < 128; i++) {
+			int d = (int)a.count[i] - (int)b.count[i];
+			if(d > 0) P += d; else N -= d;
+		}
+#endif
+		return P > N ? P : N;
 	}
 }
 

@@ -2,6 +2,19 @@
 
 Release notes for funiq, newest first. Versions follow [Semantic Versioning](https://semver.org/): a major bump means some output changed.
 
+## [Unreleased]
+
+### Performance
+- A byte-histogram prefilter skips pairs that can't match before any Levenshtein kernel runs:
+  128 saturating byte counts per line, compared with SSE2 (x86-64) or NEON (arm64), give a lower
+  bound on the edit distance, so output is unchanged. On 24k log lines it rejects 99.7% of the
+  kernel calls for `-d 3` and 94% for the `-d` preset. Windows, 1 thread: preset 3.0 s -> 0.9 s,
+  `-d 3` 4.7 s -> 1.8 s, `--best -d 3` (all cores) 0.88 s -> 0.43 s, token-sort -32%;
+  arm64 alike. Memo-heavy logs and large output are unchanged.
+- GCC builds align functions and loops (`-falign-functions=64 -falign-loops=32
+  -falign-jumps=32`), so unrelated changes can't shift the hot per-line loop to a slower address
+  (it had cost the log case 7%).
+
 ## [1.3.1] - 2026-11-24
 
 1.3.0 was tagged but never released: its macOS build never got a GitHub runner. 1.3.1 is the same
