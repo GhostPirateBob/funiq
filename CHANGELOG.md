@@ -2,6 +2,22 @@
 
 Release notes for funiq, newest first. Versions follow [Semantic Versioning](https://semver.org/): a major bump means some output changed.
 
+## [Unreleased]
+
+### Fixed
+- An unknown option (`-x`, `--nope`) is an argument error instead of being opened as a file
+  (`funiq: -x: No such file or directory`). After `--`, a leading dash is still a filename.
+- `-j` with a negative count is an error; it used to wrap to 4294967295 and start up to 256
+  threads per batch
+- `--=value` is no longer split into `--` (end of options) and `value`
+- Windows: `2>NUL` no longer pre-reads the whole input file for an invisible progress bar
+
+### Changed
+- The `lib/funiq` headers mark their functions `inline`, so they can be included from more
+  than one source file
+- Removed TCLAP precompiled headers (`lib/tclap/*.h.gch`, 4.3 MB) carried over from the
+  original repository; nothing used them
+
 ## [1.2.0] - 2026-11-13
 
 ### Added

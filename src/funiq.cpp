@@ -26,14 +26,11 @@
 #include <windows.h>
 #include <fcntl.h>
 #include <io.h>
-#define isatty _isatty
-#define STDERR_FD 2
 #ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
 #define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
 #endif
 #else
 #include <unistd.h>
-#define STDERR_FD STDERR_FILENO
 #endif
 
 #include "tclap/CmdLine.h"
@@ -161,11 +158,13 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 		return *end == '\0';
 	};
 	std::vector<std::string> args(1, progName);
+	std::vector<std::string> options; // the arguments before any "--"
 	bool literal = false;
 	for(int i = 1; i < argc; i++) {
 		std::string arg = argv[i];
+		if(!literal && arg != "--") options.push_back(arg);
 		std::string::size_type eq = arg.find('=');
-		if(!literal && arg.compare(0, 2, "--") == 0 && arg.size() > 2 && eq != std::string::npos) {
+		if(!literal && arg.compare(0, 2, "--") == 0 && eq != std::string::npos && eq > 2) {
 			args.push_back(arg.substr(0, eq));
 			args.push_back(arg.substr(eq + 1));
 		} else if(!literal && arg == "-d" && !(i + 1 < argc && isNumber(argv[i + 1]))) {
@@ -196,7 +195,8 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 	TCLAP::UnlabeledValueArg<std::string> inputFile("filename", "Input file (stdin when omitted)", false, "", "file");
 	TCLAP::ValueArg<std::string> method("m", "method", "Comparison method", false, "levenshtein", &methodChoices);
 	TCLAP::ValueArg<float> threshold("d", "distance", "Distance threshold", false, 3, "n");
-	TCLAP::ValueArg<unsigned> workers("j", "threads", "Worker threads", false, 0, "n");
+	// int, not unsigned: an unsigned stream read wraps "-1" to UINT_MAX.
+	TCLAP::ValueArg<int> workers("j", "threads", "Worker threads", false, 0, "n");
 	TCLAP::ValueArg<std::string> representative("", "rep", "Group representative", false, "first", &repChoices);
 	TCLAP::ValueArg<std::string> colorWhen("", "color", "Colour output", false, "auto", &colorChoices);
 	TCLAP::SwitchArg foldCase("i", "case-insensitive", "Ignore case");
@@ -212,10 +212,25 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 	for(TCLAP::Arg* arg : all) cmd.add(arg);
 	cmd.parse(args);
 
+	// Errors found after parsing, reported like TCLAP's own and with its exit.
+	auto reject = [&](const std::string& message, const std::string& id) {
+		TCLAP::CmdLineParseException e(message, id);
+		try { customOutput.failure(cmd, e); }
+		catch(TCLAP::ExitException& ee) { std::exit(ee.getExitStatus()); }
+	};
+	// TCLAP hands any unmatched argument to the filename, so an unknown option
+	// would surface as "-x: No such file or directory". Before "--", nothing
+	// starting with '-' is a filename.
+	const std::string& file = inputFile.getValue();
+	if(file.size() > 1 && file[0] == '-' && std::find(options.begin(), options.end(), file) != options.end())
+		reject("Couldn't find match for argument", file);
+	if(workers.getValue() < 0)
+		reject("Value '" + std::to_string(workers.getValue()) + "' does not meet constraint: 0 or more", workers.toString());
+
 	colorMode = colorWhen.getValue() == "always" ? color::Always
 	          : colorWhen.getValue() == "never" ? color::Never : color::Auto;
 
-	settings.threads = workers.getValue() ? workers.getValue() : std::thread::hardware_concurrency();
+	settings.threads = workers.getValue() ? (unsigned)workers.getValue() : std::thread::hardware_concurrency();
 	if(settings.threads == 0) settings.threads = 1; // hardware_concurrency() may not know
 
 	// The preset first; explicit flags then refine it.
@@ -304,7 +319,9 @@ int main(int argc, char* argv[]) {
 		// Show progress on stderr when it's a terminal. This keeps the
 		// progress indicator visible even when stdout is piped or
 		// redirected (e.g. funiq file.txt | tee out.txt).
-		bool showProgress = isatty(STDERR_FD);
+		// isTerminal, not isatty: on Windows _isatty is also true for NUL, and
+		// `2>NUL` would pre-count the whole file for a bar nobody sees.
+		bool showProgress = stderrTerminal;
 		unsigned long lineCount = 0;
 		unsigned long totalLines = 0;
 
