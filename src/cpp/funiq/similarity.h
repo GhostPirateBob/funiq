@@ -44,6 +44,7 @@ namespace similarity {
 		std::vector<unsigned int> rows;  // banded DP: two rows
 		uint64_t peq[256];               // single-word kernel: pattern positions of each byte
 		Window window[256];
+		std::vector<uint32_t> candidates; // the matcher's piece-index candidates (reused)
 		Scratch() {
 			for(auto& p : peq) p = 0;
 			for(auto& w : window) w = Window{FAR_PAST, 0};
