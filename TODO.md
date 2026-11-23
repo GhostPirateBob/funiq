@@ -22,8 +22,8 @@ Ideas collected while building 1.x, roughly by value. Nothing here is committed 
 
 The remaining cost on very diverse input is the banded DP for each (line, key) pair.
 
-- **mbleven** for thresholds of 3 edits or fewer: try the at most 7 edit scripts directly instead of running a DP (rapidfuzz-cpp does this).
-- **Bit-parallel Levenshtein** (Myers/Hyyrö) with a pattern table cached per key, for normalized thresholds where the band is wider.
+- **mbleven** for thresholds of 3 edits or fewer: try the at most 7 edit scripts directly. It may beat the bit-parallel band at `-d 1..3`; measure against it.
+- **Blocked bit-parallel Levenshtein** for bands wider than 64 bits on long lines (e.g. `-m normalized-levenshtein -d 0.3`), which still use the banded DP.
 - **q-gram count filter** before the DP for the normalized methods: if `ed(a, b) ≤ k`, they share at least `max(|a|,|b|) − q + 1 − kq` q-grams (counted with multiplicity), so most pairs can be rejected by a profile merge.
 - Revisit a length index with a k-way merge instead of sort, now that the per-pair cost is lower.
 
