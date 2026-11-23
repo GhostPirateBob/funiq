@@ -3,27 +3,148 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
 
 namespace similarity {
 
+	// The bit-parallel kernels win from k = 1 (measured: -d 3 on 24k log lines
+	// 5.5s -> 3.4s, -d 1 1.76s -> 1.61s); rapidfuzz waits until 4 because
+	// below that it uses mbleven, which funiq doesn't have. k = 0 stays on the
+	// DP, which settles it in one row.
+	const unsigned int BIT_PARALLEL_MIN_K = 1;
+	// Position of the band kernel's untouched window entries (see Scratch).
+	const std::ptrdiff_t FAR_PAST = std::numeric_limits<std::ptrdiff_t>::min() / 4;
+
+	// Reusable working memory for the distance functions, one per thread so
+	// the hot loop never allocates. Deliberately not a thread_local: MinGW
+	// static builds can run non-trivial thread_local destructors after their
+	// TLS storage is freed, corrupting the heap. The per-byte tables are back
+	// to their initial state after every call (each kernel resets only the
+	// entries it touched), so no call pays for clearing all 256.
+	struct Scratch {
+		// Bits of one byte in the band kernel's sliding window; bit 63 is
+		// position `at`. Untouched entries sit far in the past, so any shift
+		// pushes their (empty) bits out.
+		struct Window { std::ptrdiff_t at; uint64_t bits; };
+		std::vector<unsigned int> rows;  // banded DP: two rows
+		uint64_t peq[256];               // single-word kernel: pattern positions of each byte
+		Window window[256];
+		Scratch() {
+			for(auto& p : peq) p = 0;
+			for(auto& w : window) w = Window{FAR_PAST, 0};
+		}
+	};
+
+	inline uint64_t shr64(uint64_t x, std::ptrdiff_t s) { return s < 64 ? x >> s : 0; }
+
+	// Hyyro's bit-parallel Levenshtein (2003) for a pattern of 1 to 64 bytes:
+	// one 64-bit word holds a whole DP column, so each text byte costs a
+	// dozen word operations. Stops once the last row, which moves by at most
+	// one per remaining column, can no longer come back within k. Exact
+	// distance when <= k, else k + 1. Technique from rapidfuzz-cpp (MIT).
+	inline unsigned int levenshteinWord(const unsigned char* text, unsigned int n,
+	                                    const unsigned char* pattern, unsigned int m,
+	                                    unsigned int k, Scratch& scratch) {
+		uint64_t* peq = scratch.peq;
+		for(unsigned int j = 0; j < m; j++) peq[pattern[j]] |= uint64_t(1) << j;
+		uint64_t VP = ~uint64_t(0), VN = 0;
+		const uint64_t last = uint64_t(1) << (m - 1);
+		unsigned int dist = m;
+		unsigned int i = 0;
+		for(; i < n; i++) {
+			const uint64_t X = peq[text[i]];
+			const uint64_t D0 = (((X & VP) + VP) ^ VP) | X | VN;
+			uint64_t HP = VN | ~(D0 | VP);
+			uint64_t HN = D0 & VP;
+			dist += (HP & last) != 0;
+			dist -= (HN & last) != 0;
+			if(dist > k + (n - 1 - i)) break;
+			HP = (HP << 1) | 1;
+			HN <<= 1;
+			VP = HN | ~(D0 | HP);
+			VN = HP & D0;
+		}
+		for(unsigned int j = 0; j < m; j++) peq[pattern[j]] = 0;
+		return (i < n || dist > k) ? k + 1 : dist;
+	}
+
+	// Hyyro's banded variant for long strings: the 2k + 1 diagonals around the
+	// main one fit one 64-bit word (k <= 31), and the pattern bits are kept as
+	// a window sliding along s1, so there is no table of s1 to build. Gives up
+	// as soon as the diagonal, which never decreases, passes the bound.
+	// Requires s1 the longer, k <= len(s2) and len(s1) - len(s2) <= k. Exact
+	// distance when <= k, else k + 1. Technique from rapidfuzz-cpp (MIT).
+	inline unsigned int levenshteinBand(const unsigned char* s1, unsigned int n,
+	                                    const unsigned char* s2, unsigned int m,
+	                                    unsigned int k, Scratch& scratch) {
+		Scratch::Window* pm = scratch.window;
+		unsigned int inserted = 0; // s1 bytes added to the window so far
+		auto insert = [&](std::ptrdiff_t at) {
+			Scratch::Window& w = pm[s1[inserted++]];
+			w.bits = shr64(w.bits, at - w.at) | (uint64_t(1) << 63);
+			w.at = at;
+		};
+		auto lookup = [&](unsigned char c, std::ptrdiff_t at) { return shr64(pm[c].bits, at - pm[c].at); };
+
+		uint64_t VP = ~uint64_t(0) << (64 - k - 1);
+		uint64_t VN = 0;
+		unsigned int dist = k;
+		const uint64_t diagonal = uint64_t(1) << 63;
+		uint64_t horizontal = uint64_t(1) << 62;
+		// the score can fall along the horizontal stretch, never on the diagonal
+		const unsigned int breakScore = 2 * k + m - n;
+		bool gaveUp = false;
+
+		for(std::ptrdiff_t j = -(std::ptrdiff_t)k; j < 0; j++) insert(j);
+		unsigned int i = 0;
+		for(; i < n - k; i++) {
+			insert(i);
+			const uint64_t X = lookup(s2[i], i);
+			const uint64_t D0 = (((X & VP) + VP) ^ VP) | X | VN;
+			const uint64_t HP = VN | ~(D0 | VP);
+			const uint64_t HN = D0 & VP;
+			dist += !(D0 & diagonal);
+			if(dist > breakScore) { gaveUp = true; break; }
+			VP = HN | ~((D0 >> 1) | HP);
+			VN = (D0 >> 1) & HP;
+		}
+		if(!gaveUp) {
+			for(; i < m; i++) {
+				if(inserted < n) insert(i);
+				const uint64_t X = lookup(s2[i], i);
+				const uint64_t D0 = (((X & VP) + VP) ^ VP) | X | VN;
+				const uint64_t HP = VN | ~(D0 | VP);
+				const uint64_t HN = D0 & VP;
+				dist += (HP & horizontal) != 0;
+				dist -= (HN & horizontal) != 0;
+				horizontal >>= 1;
+				if(dist > breakScore) { gaveUp = true; break; }
+				VP = HN | ~((D0 >> 1) | HP);
+				VN = (D0 >> 1) & HP;
+			}
+		}
+		for(unsigned int t = 0; t < inserted; t++) pm[s1[t]] = Scratch::Window{FAR_PAST, 0};
+		return (gaveUp || dist > k) ? k + 1 : dist;
+	}
+
 	// Levenshtein distance with a cutoff: returns the exact distance when it
 	// is <= k, otherwise k + 1. Almost every comparison funiq makes is a
 	// non-match against a far-away key, so rejecting early is what matters:
 	//  1. length bound: at least |len1 - len2| insertions/deletions needed
 	//  2. common prefix/suffix never affect the distance; strip them
-	//  3. Ukkonen band: only cells with |i - j| <= k can stay <= k
-	//  4. abort as soon as a whole row exceeds k (rows never decrease)
+	//  3. bit-parallel kernels (k = 1..31 in a 64-bit band, or a short side
+	//     of at most 64 bytes): one word of the DP per step, so the cost no
+	//     longer grows with k (the normalized methods' k is ~12% of the line)
+	//  4. otherwise a banded DP (Ukkonen) that aborts once a whole row
+	//     exceeds k
 	// Technique follows rapidfuzz-cpp's uniform_levenshtein_distance (MIT).
-	// `scratch` holds the two DP rows; pass the same vector to every call
-	// (one per thread) so the hot loop never allocates. Deliberately not a
-	// thread_local: MinGW static builds can run non-trivial thread_local
-	// destructors after their TLS storage is freed, corrupting the heap.
 	inline unsigned int boundedLevenshtein(const std::string& s1, const std::string& s2, unsigned int k,
-	                                std::vector<unsigned int>& scratch) {
+	                                Scratch& scratch) {
 		const std::string* longer = &s1;
 		const std::string* shorter = &s2;
 		if(longer->size() < shorter->size()) std::swap(longer, shorter);
@@ -38,8 +159,16 @@ namespace similarity {
 		while(m > 0 && a[n - 1] == b[m - 1]) { n--; m--; }
 		if(m == 0) return n; // n <= k, guaranteed by the length bound
 
-		if(scratch.size() < 2 * (m + 2)) scratch.resize(2 * (m + 2));
-		unsigned int* prev = scratch.data();
+		const unsigned char* ua = reinterpret_cast<const unsigned char*>(a);
+		const unsigned char* ub = reinterpret_cast<const unsigned char*>(b);
+		if(k >= BIT_PARALLEL_MIN_K) {
+			if(k <= m && 2 * k + 1 <= 64) return levenshteinBand(ua, n, ub, m, k, scratch);
+			if(m <= 64) return levenshteinWord(ua, n, ub, m, k, scratch);
+		}
+
+		std::vector<unsigned int>& rows = scratch.rows;
+		if(rows.size() < 2 * (m + 2)) rows.resize(2 * (m + 2));
+		unsigned int* prev = rows.data();
 		unsigned int* cur = prev + (m + 2);
 		const unsigned int INF = k + 1; // anything > k is "too far"
 
@@ -68,9 +197,9 @@ namespace similarity {
 		return std::min(prev[m], INF);
 	}
 
-	// Convenience overload for one-off calls; allocates its own rows.
+	// Convenience overload for one-off calls; allocates its own scratch.
 	inline unsigned int boundedLevenshtein(const std::string& s1, const std::string& s2, unsigned int k) {
-		std::vector<unsigned int> scratch;
+		Scratch scratch;
 		return boundedLevenshtein(s1, s2, k, scratch);
 	}
 
