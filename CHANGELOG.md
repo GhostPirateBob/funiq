@@ -13,7 +13,19 @@ Release notes for funiq, newest first. Versions follow [Semantic Versioning](htt
 - `-j` with a negative count is an error; it used to wrap to 4294967295 and start up to 256
   threads per batch
 - `--=value` is no longer split into `--` (end of options) and `value`
+- A directory argument is an error; on Linux it used to print nothing and exit 0
 - Windows: `2>NUL` no longer pre-reads the whole input file for an invisible progress bar
+
+### Performance
+- Worker threads are started once and reused for every batch. Starting them per 256-line batch
+  made log runs slower on all cores than on one: `-d -D` on 240k log lines, 12 threads,
+  1.65s -> 0.36s (`-j 1`: 0.60s)
+- Without `-a`/`--scores`, groups keep a count instead of every member line: `-d -D -c` on a
+  27 MB log peaks at 5.5 MB instead of 46.5 MB
+- Input is read and output written through 1 MiB buffers (libstdc++ uses 512 bytes on MinGW):
+  diverse input 17-19% faster, 27 MB of `-a` output through a pipe 11% faster
+- The progress bar no longer reads a file twice to count its lines; the percentage now comes
+  from bytes read, also for `< file`. It redraws at most 10 times a second.
 
 ### Changed
 - The `lib/funiq` headers mark their functions `inline`, so they can be included from more

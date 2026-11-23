@@ -202,6 +202,40 @@ TEST_CASE( "addBatch with threads gives the same groups as serial add", "[matche
 	}
 }
 
+TEST_CASE( "runs that don't print members (only counts) give the same groups as -a", "[matcher]" ) {
+	// Without -a/--scores the matcher keeps a count and the longest line per
+	// group instead of every member; the groups, counts and representatives
+	// must not change.
+	std::mt19937 rng(777);
+	const char* templates[] = { "GET /x/## 200", "error ## at line ##", "ok", "warning: v## is deprecated" };
+	std::vector<std::string> lines;
+	for(int i = 0; i < 500; i++) {
+		std::string s = templates[rng() % 4];
+		for(auto& c : s) if(c == '#') c = '0' + rng() % 10;
+		if(rng() % 4 == 0) s += std::string(rng() % 6, 'z'); // vary lengths for --rep longest
+		lines.push_back(s);
+	}
+	for(ComparisonMethod method : {Levenshtein, NormalizedLevenshtein, Cosine})
+	for(bool best : {false, true})
+	for(Representative rep : {RepFirst, RepLongest}) {
+		Settings counted;
+		counted.comparisonMethod = method;
+		counted.maxDistance = method == Levenshtein ? 2.0f : 0.2f;
+		counted.bestMatch = best;
+		counted.representative = rep;
+		counted.showTotals = true;
+		Settings listed = counted;
+		listed.showAllMatches = true;
+
+		std::string withMembers = runMatcher(listed, lines, 3, &rng), cut;
+		std::istringstream in(withMembers);
+		for(std::string row; std::getline(in, row); ) cut += row.substr(0, row.find('\t')) + "\n";
+		INFO("method=" << method << " best=" << best << " rep=" << rep);
+		REQUIRE(runMatcher(counted, lines, 3, &rng) == cut);
+		REQUIRE(runMatcher(counted, lines, 0, &rng) == cut);
+	}
+}
+
 TEST_CASE( "--mask-digits: lines differing only in numbers become duplicates", "[tier3]" ) {
 	Settings settings;
 	settings.maxDistance = 0;
