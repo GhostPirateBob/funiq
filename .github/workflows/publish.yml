@@ -10,7 +10,8 @@
 #   3. check the draft, then publish it: gh release edit vX.Y.Z --draft=false
 #
 # Linux binaries are fully static (no glibc/libstdc++ version requirements);
-# the Windows .exe is static MinGW; macOS is a universal (arm64 + x86_64) binary.
+# the Windows .exe is static MinGW. No macOS asset since 1.3.1: GitHub's macOS
+# runners rarely picked the job up (re-add the matrix entry to bring it back).
 #
 # Verify a download:
 #   gh attestation verify funiq-X.Y.Z-<platform>.tar.gz --repo GhostPirateBob/funiq
@@ -38,9 +39,6 @@ jobs:
             ldflags: -static
           - os: windows-latest
             platform: windows-x86_64
-          - os: macos-latest
-            platform: macos-universal
-            cxx: clang++ -arch arm64 -arch x86_64
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -146,7 +144,6 @@ jobs:
           | Linux x86_64 (static) | \`funiq-${version}-linux-x86_64.tar.gz\` |
           | Linux arm64 (static) | \`funiq-${version}-linux-arm64.tar.gz\` |
           | Windows x86_64 (static) | \`funiq-${version}-windows-x86_64.zip\` |
-          | macOS (universal) | \`funiq-${version}-macos-universal.tar.gz\` |
 
           ### Verify
           Every archive has a GitHub build-provenance attestation, and SHA256SUMS lists their hashes:

@@ -11,7 +11,7 @@ $ funiq -iI -d 4 -c ships.txt
       3 USS Voyager
 ```
 
-**Install:** download a static binary for Linux (x86_64, arm64), Windows or macOS from [Releases](../../releases), or build it: `make && make install` (details, platforms and tests in [BUILDING.md](BUILDING.md)).
+**Install:** download a static binary for Linux (x86_64, arm64) or Windows from [Releases](../../releases) (on macOS, build it), or build it: `make && make install` (details, platforms and tests in [BUILDING.md](BUILDING.md)).
 
 ## Examples
 

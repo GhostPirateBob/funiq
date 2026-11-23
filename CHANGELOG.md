@@ -2,7 +2,10 @@
 
 Release notes for funiq, newest first. Versions follow [Semantic Versioning](https://semver.org/): a major bump means some output changed.
 
-## [1.3.0] - 2026-11-24
+## [1.3.1] - 2026-11-24
+
+1.3.0 was tagged but never released: its macOS build never got a GitHub runner. 1.3.1 is the same
+code, released without a macOS archive (build it with `make` on macOS).
 
 ### Added
 - Rust and Go ports (`src/rust`, `src/go`) for comparing languages: the same algorithm with
