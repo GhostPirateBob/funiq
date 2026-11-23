@@ -214,6 +214,84 @@ TEST_CASE( "histogramBound never exceeds the edit distance", "[histogram]" ) {
 	}
 }
 
+// Random keys over a small alphabet, half of them edited copies of earlier
+// ones, so plenty of pairs are within a few edits.
+static std::vector<std::string> pieceTestLines(std::mt19937& rng, size_t count, size_t maxLen) {
+	const std::string alphabet = "abcde ./";
+	std::vector<std::string> lines;
+	for(size_t n = 0; n < count; n++) {
+		std::string s;
+		if(!lines.empty() && rng() % 2) {
+			s = lines[rng() % lines.size()];
+			for(int e = rng() % 4; e > 0; e--) {
+				size_t at = s.empty() ? 0 : rng() % (s.size() + 1);
+				switch(rng() % 3) {
+					case 0: if(at < s.size()) s[at] = alphabet[rng() % alphabet.size()]; break;
+					case 1: s.insert(s.begin() + at, alphabet[rng() % alphabet.size()]); break;
+					default: if(at < s.size()) s.erase(s.begin() + at); break;
+				}
+			}
+		} else {
+			for(size_t i = rng() % (maxLen + 1); i > 0; i--) s += alphabet[rng() % alphabet.size()];
+		}
+		lines.push_back(s);
+	}
+	return lines;
+}
+
+TEST_CASE( "PieceIndex candidates include every key within k edits", "[index]" ) {
+	// The matcher verifies only the index's candidates, so a key within k
+	// edits that the index leaves out would be a lost match.
+	std::mt19937 rng(20261125);
+	for(unsigned k = 0; k <= 4; k++) {
+		PieceIndex index(k);
+		std::vector<std::string> keys = pieceTestLines(rng, 300, 40);
+		for(size_t id = 0; id < keys.size(); id++) index.add(keys[id], (uint32_t)id);
+		std::vector<std::string> queries = pieceTestLines(rng, 200, 40);
+		for(size_t q = 0; q < 200; q++) queries.push_back(keys[rng() % keys.size()]); // exact and near keys too
+		std::vector<uint32_t> out;
+		for(const auto& query : queries) {
+			size_t from = rng() % 50, to = keys.size() - rng() % 50; // the batch phases ask for ranges
+			index.candidates(query, from, to, out);
+			REQUIRE(std::is_sorted(out.begin(), out.end()));
+			REQUIRE(std::adjacent_find(out.begin(), out.end()) == out.end());
+			for(uint32_t id : out) REQUIRE((id >= from && id < to));
+			for(size_t id = from; id < to; id++)
+				if(referenceLevenshtein(query, keys[id]) <= k) {
+					INFO("k=" << k << " query=\"" << query << "\" key=\"" << keys[id] << "\"");
+					REQUIRE(std::binary_search(out.begin(), out.end(), (uint32_t)id));
+				}
+		}
+	}
+}
+
+TEST_CASE( "the piece index gives the same groups as the full scan", "[index][matcher]" ) {
+	std::mt19937 rng(77);
+	std::vector<std::string> lines = pieceTestLines(rng, 1500, 30);
+	for(float d : {0.0f, 1.0f, 2.0f, 3.5f}) {
+		for(int mode = 0; mode < 3; mode++) {
+			Settings settings;
+			settings.maxDistance = d;
+			settings.showTotals = true;
+			if(mode == 1) settings.bestMatch = true;
+			if(mode == 2) { settings.showAllMatches = true; settings.showScores = true; }
+			auto run = [&](size_t indexMinGroups, unsigned threads) {
+				Matcher matcher(settings);
+				matcher.setIndexMinGroups(indexMinGroups);
+				if(threads == 0) for(const auto& line : lines) matcher.add(line);
+				else for(size_t pos = 0; pos < lines.size(); pos += 100)
+					matcher.addBatch(std::vector<std::string>(lines.begin() + pos,
+						lines.begin() + std::min(pos + 100, lines.size())), threads);
+				return showLines(matcher);
+			};
+			INFO("d=" << d << " mode=" << mode);
+			const auto scan = run((size_t)-1, 0);
+			REQUIRE(run(0, 0) == scan);  // index always on, serial
+			REQUIRE(run(0, 4) == scan);  // index always on, both batch phases
+		}
+	}
+}
+
 TEST_CASE( "a repeated line joins the same group as its first occurrence", "[matcher]" ) {
 	Settings settings;
 	settings.maxDistance = 1;

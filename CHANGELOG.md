@@ -2,7 +2,10 @@
 
 Release notes for funiq, newest first. Versions follow [Semantic Versioning](https://semver.org/): a major bump means some output changed.
 
-## [Unreleased]
+## [1.4.0] - 2026-11-24
+
+CI no longer runs on macOS: GitHub's macOS runners often never picked the job up, which failed
+every run. `make all` still builds and tests natively on macOS.
 
 ### Performance
 - A byte-histogram prefilter skips pairs that can't match before any Levenshtein kernel runs:
@@ -15,6 +18,17 @@ Release notes for funiq, newest first. Versions follow [Semantic Versioning](htt
   `-d 3` -44%); Go, which has no SIMD intrinsics, as 16 packed words compared eight bytes at a
   time (SWAR) with one saturating subtract per word and an early exit (preset -53%, `-d 3` -45%;
   a plain Go loop made it slower than no filter).
+- A pigeonhole piece index for `-m levenshtein` with `-d` 0-4 on large inputs: each group key is
+  split into k + 1 pieces, one of which survives any k edits, so a line looks up its substrings
+  and visits only groups sharing a piece (in index order: same output). On 96k diverse lines
+  `-d 1` 19.1 s -> 2.4 s (240k lines), `-d 2` 2.8x, `-d 3` 1.8x (240k lines 35.8 s -> 19.3 s),
+  `-d 4` 1.2x. Below ~1,000 groups, and for normalized methods, the scan stays. C++ only so far:
+  the Rust and Go ports still scan, so `-d 3` comparisons in `bench/` favour the C++.
+- Batches of 1,024 lines instead of 256 (all three languages), and the C++ hands each thread
+  16 lines at a time. Every batch wakes and waits for all the threads; on memo-heavy logs that
+  handoff cost more than the work, so all cores ran slower than one thread on Windows. 272 MB
+  of logs (`-d -D`, 12 threads) 2.5 s -> 1.24 s (`-j 1`: 1.9 s); Rust -22%, Go -18%; preset
+  and token-sort on 240k lines -7% / -21%; `-d 3` unchanged.
 - GCC builds align functions and loops (`-falign-functions=64 -falign-loops=32
   -falign-jumps=32`), so unrelated changes can't shift the hot per-line loop to a slower address
   (it had cost the log case 7%).

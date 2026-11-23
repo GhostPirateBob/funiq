@@ -21,7 +21,7 @@ funiq groups near-duplicate lines. It reads every line, assigns each to a group,
 
 ```
 argv ─► rewrite (--opt=value, bare -d) ─► TCLAP ─► Settings
-input ─► 1 MiB reads ─► 256-line batches ─► Matcher::addBatch ─► groups ─► Matcher::show ─► stdout
+input ─► 1 MiB reads ─► 1024-line batches ─► Matcher::addBatch ─► groups ─► Matcher::show ─► stdout
                                │
             per line: normalize ─► memo? ─► scan groups (length check ─► distance)
 ```
@@ -56,18 +56,23 @@ So grouping is greedy and order-dependent, like a single pass of leader clusteri
 
 The band kernel beats the DP from `k = 1` (measured: `-d 3` 1.7× faster), and trying the column kernel first is 1.4× slower than the band on log lines. rapidfuzz-cpp switches at `k = 4` only because below that it uses mbleven. The DP rows and the kernels' per-byte tables live in a caller-provided `similarity::Scratch`, one per thread, so the hot loop never allocates. Each kernel resets only the table entries it touched, so no call clears all 256. `Matcher::distanceTo` turns the threshold into a budget `k`. For the normalized methods it adds one edit of slack, and the original float comparison `dist / maxLen <= d` still decides. Results are therefore identical to computing the full distance. A cheaper length-only check (`lengthRulesOut`) runs first over a contiguous array of key lengths. The exact `levenshteinDistance` is simply the bounded version with a budget no pair can exceed.
 
+**Before the kernel: two lossless filters.** Nearly every comparison is a miss (24k log lines: 99.97% of `-d 3` kernel calls), so the matcher tries to prove a miss cheaply first. Neither filter can drop a real match, so output never changes:
+
+- **Byte histogram** (`similarity::histogramBound`): 128 saturating counts per key (bytes folded to `c & 127`). With P and N the surplus counts on either side, every edit changes P and N by at most one, so at least max(P, N) edits are needed. Compared with SSE2 (x86-64, MSVC too) or NEON (arm64), it rejects 99.7% of `-d 3` and 94% of the preset's kernel calls.
+- **Piece index** (`PieceIndex.h`, `-m levenshtein` with `-d` 0–4 and over ~1,000 groups; C++ only so far, the Rust and Go ports still scan): each key is split into k + 1 pieces, and k edits leave one unchanged at a shift δ with |δ| + |(n − L) − δ| ≤ k. A line looks up its substrings at those positions and visits only the groups found, in index order, so first-match and `--best` are unaffected. On 96k diverse lines, `-d 1` is 7.8× faster, `-d 2` 2.8×, `-d 3` 1.8× and `-d 4` 1.2×; from `-d 5` it would lose, so it stops at 4. It helps less as k grows because templated log lines share most of their text: lines differing only in IPs and timestamps share three of four pieces, and only the digits (the histogram) tell them apart.
+
 **Cosine.** `trigramProfile` packs every 3-byte window exactly into 24 bits, so there is no hashing and there are no collisions. Strings shorter than 3 characters become one tagged gram. The profile is a sorted vector of (gram, count) pairs plus its norm, built once per key, so each comparison is a linear merge. There is no length bound for cosine.
 
 ### 5. Threads (`Matcher::addBatch`)
 
-Input is read in batches of 256 lines. Each batch runs in two phases:
+Input is read in batches of 1,024 lines. Each batch runs in two phases:
 
 1. **Parallel, read-only:** every line is normalised and compared against the groups that existed before the batch (the "frozen" groups), on up to `-j` threads.
 2. **Serial, in input order:** a line then checks only the groups created earlier in the same batch. All of those have higher indices than any frozen group, so a first-match hit from phase 1 is already the overall answer. Under `--best`, a new group wins only if it is strictly closer, which preserves the serial tie-break.
 
 The threads are started once (`WorkerPool`) and woken for each batch. Starting them per batch used to cost more than the batch itself on log input, where most lines are memo hits: all cores ran twice as long as one.
 
-The output is therefore byte-identical for any thread count, and the unit tests check that in every mode. Batches of 256 keep the serial phase short when most lines start new groups, while giving the threads enough work per round.
+The output is therefore byte-identical for any thread count, and the unit tests check that in every mode. Batches of 1,024 keep the serial phase short when most lines start new groups, while giving the threads enough work per round: every batch wakes and waits for all the threads, and with 256-line batches that handoff cost more than the work on memo-heavy logs (12 threads ran slower than 1 on Windows). 4,096 made the serial phase too long on diverse input.
 
 ### 6. Output (`Matcher::show`)
 

@@ -103,7 +103,7 @@ Use literal paths in such one-liners: a variable that ends up empty turns `cd $D
 `.github/workflows/ci.yml` runs on every push to `master` and every pull request:
 
 - **lint:** first-party code must compile without warnings under g++ and clang++ (`-Wall -Wextra`, plus `-Wpedantic` for the tool itself); ShellCheck on the CLI tests; the Python helpers must compile.
-- **test:** `make all` (unit and CLI suites) and an install round trip on Linux x86_64, Linux arm64, Windows (MinGW, static) and macOS. On macOS and Windows the terminal tests are skipped, because they need util-linux `script`.
+- **test:** `make all` (unit and CLI suites) and an install round trip on Linux x86_64, Linux arm64 and Windows (MinGW, static). On Windows the terminal tests are skipped, because they need util-linux `script`. macOS left CI in 1.4.0 (GitHub's macOS runners often never picked the job up, failing every run); `make all` still works there.
 
 ## Releases
 

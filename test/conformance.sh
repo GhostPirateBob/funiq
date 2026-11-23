@@ -46,7 +46,7 @@ for flags in "-d 3" "-d" "-d 0 -c" "-a -d 2"; do
 	same "long.txt $flags" "$TMP/long.txt" $flags
 done
 
-# --- seeded random lines: ten batches, so the threaded two-phase matcher -----
+# --- seeded random lines: five batches, so the threaded two-phase matcher ----
 # crosses batch boundaries (with --best too)
 for flags in "-d 3 -j 3" "-d 2 --best -c -j 3" "-d -j 2" "-m token-sort -iI -j 2" 	"-m cosine -d 0.2 -j 3" "--rep longest --best -d 2 -c -a -j 4" "-D -d 1 -c" 	"-m normalized-levenshtein -d 0.1 --scores -j 2"; do
 	# shellcheck disable=SC2086

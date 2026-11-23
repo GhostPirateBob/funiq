@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "Color.h"
+#include "PieceIndex.h"
 #include "Settings.h"
 #include "WorkerPool.h"
 #include "similarity.h"
@@ -56,6 +57,9 @@ struct Hit {
 class Matcher {
 public:
 	explicit Matcher(const Settings& settings);
+	// Use the piece index once a scan would cover at least this many groups
+	// (tests force it on with 0, off with (size_t)-1).
+	void setIndexMinGroups(size_t n) { indexMinGroups = n; }
 	void add(std::string line);
 	// Same result as calling add() on each line in order, but the scan
 	// against groups that existed before the batch runs on up to `threads`
@@ -74,6 +78,12 @@ private:
 	// keyHistograms[i]: groups[i].normalizedKey's byte counts, for the
 	// prefilter (empty for -m cosine, which has no edit budget)
 	std::vector<similarity::ByteHistogram> keyHistograms;
+	// -m levenshtein with a small whole budget: a pigeonhole index of the
+	// keys, so a line visits only groups that could be within k edits
+	// (24k-288k diverse lines: each line visited ~16k groups, 99.97% misses)
+	bool indexed = false;
+	PieceIndex index;
+	size_t indexMinGroups = (size_t)-1;
 	// keyLengths[i] == groups[i].normalizedKey.size(), stored contiguously
 	// so the length pre-check scans one compact array instead of the groups.
 	std::vector<unsigned int> keyLengths;
@@ -122,7 +132,19 @@ inline bool Matcher::lengthRulesOut(unsigned int len, unsigned int keyLen) const
 	return diff > opts.maxDistance;
 }
 
-inline Matcher::Matcher(const Settings& settings) : opts(settings) {}
+inline Matcher::Matcher(const Settings& settings) : opts(settings) {
+	// Lookups per line grow as k^3 and pieces get less selective, so only
+	// small budgets (96k diverse lines: k = 1 7.8x faster, 2 2.8x, 3 1.8x,
+	// 4 1.2x, 5 0.83x). A line costs about (2k+1)(k+1)(k/2+1) lookups, so
+	// the index pays off once a scan would visit some multiple of that.
+	const float d = opts.maxDistance;
+	if(opts.comparisonMethod == Levenshtein && d >= 0 && d < 5) {
+		const unsigned k = (unsigned)d;
+		indexed = true;
+		index = PieceIndex(k);
+		indexMinGroups = 16 * (size_t)(2 * k + 1) * (k + 1) * (k / 2 + 1);
+	}
+}
 
 // ASCII classes, as <cctype> gives them in the C locale funiq runs in, but
 // inline: on MinGW/UCRT each <cctype> call is a real call through the locale.
@@ -192,14 +214,21 @@ inline Hit Matcher::findMatch(const Candidate& c, size_t from, size_t to,
                        similarity::Scratch& scratch) const {
 	const unsigned int len = c.normalized.size();
 	Hit best;
-	for(size_t i = from; i < to; i++) {
-		if(lengthRulesOut(len, keyLengths[i])) continue;
+	auto visit = [&](size_t i) -> bool { // true: stop looking
+		if(lengthRulesOut(len, keyLengths[i])) return false;
 		double score;
-		if(!distanceTo(c, i, scratch, score)) continue;
-		if(!opts.bestMatch) return Hit(i, score);
+		if(!distanceTo(c, i, scratch, score)) return false;
+		if(!opts.bestMatch) { best = Hit(i, score); return true; }
 		if(best.group == NO_GROUP || score < best.score) best = Hit(i, score);
-		if(score == 0) break; // nothing can beat an exact match
+		return score == 0; // nothing can beat an exact match
+	};
+	if(indexed && to - from >= indexMinGroups) {
+		// the same groups in the same order, minus those that can't match
+		index.candidates(c.normalized, from, to, scratch.candidates);
+		for(uint32_t i : scratch.candidates) if(visit(i)) break;
+		return best;
 	}
+	for(size_t i = from; i < to; i++) if(visit(i)) break;
 	return best;
 }
 
@@ -231,6 +260,7 @@ inline void Matcher::place(std::string line, Candidate& c, Hit hit, bool memoise
 	group.key = std::move(line);
 	keyLengths.push_back(c.normalized.size());
 	if(usesHistogram()) keyHistograms.push_back(*c.histogram);
+	if(indexed) index.add(c.normalized, (uint32_t)groups.size());
 	group.normalizedKey = std::move(c.normalized);
 	group.profile = std::move(c.profile);
 	group.count = 1;
@@ -271,7 +301,10 @@ inline void Matcher::addBatch(std::vector<std::string> lines, unsigned threads) 
 	std::atomic<size_t> next(0);
 	pool->run([&](unsigned w) {
 		similarity::Scratch& own = poolScratch[w]; // this thread's working memory
-		for(size_t i; (i = next++) < lines.size(); ) {
+		// 16 lines per grab: one atomic increment per line contended across
+		// threads (4 threads: -12%)
+		for(size_t start; (start = next.fetch_add(16)) < lines.size(); )
+		for(size_t i = start, end = std::min(start + 16, lines.size()); i < end; i++) {
 			candidates[i] = prepare(lines[i]);
 			Hit memo = lookupMemo(candidates[i].normalized);
 			memoised[i] = memo.group != NO_GROUP;

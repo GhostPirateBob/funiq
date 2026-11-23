@@ -1,6 +1,8 @@
 # Lint, build and test on every push to master and every pull request, on Linux
-# (x86_64 and arm64), Windows (MinGW, static) and macOS. Never publishes; see
-# publish.yml for releases.
+# (x86_64 and arm64) and Windows (MinGW, static). Never publishes; see
+# publish.yml for releases. No macOS since 1.4.0: GitHub's macOS runners often
+# never picked the job up, which failed every run (add macos-latest back to
+# the matrix to restore it).
 name: CI
 
 on:
@@ -41,7 +43,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-latest, macos-latest]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-latest]
     runs-on: ${{ matrix.os }}
     defaults:
       run:
