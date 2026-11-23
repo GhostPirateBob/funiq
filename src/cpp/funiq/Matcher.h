@@ -271,7 +271,10 @@ inline void Matcher::addBatch(std::vector<std::string> lines, unsigned threads) 
 	std::atomic<size_t> next(0);
 	pool->run([&](unsigned w) {
 		similarity::Scratch& own = poolScratch[w]; // this thread's working memory
-		for(size_t i; (i = next++) < lines.size(); ) {
+		// 16 lines per grab: one atomic increment per line contended across
+		// threads (4 threads: -12%)
+		for(size_t start; (start = next.fetch_add(16)) < lines.size(); )
+		for(size_t i = start, end = std::min(start + 16, lines.size()); i < end; i++) {
 			candidates[i] = prepare(lines[i]);
 			Hit memo = lookupMemo(candidates[i].normalized);
 			memoised[i] = memo.group != NO_GROUP;

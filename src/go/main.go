@@ -20,7 +20,7 @@ const version = "1.3.1"
 
 // batchSize: lines per batch, as in the C++; each batch's scan runs on all
 // threads.
-const batchSize = 256
+const batchSize = 1024
 
 // programName is argv[0] without its directory, as the C++ binary prints it.
 func programName() string {

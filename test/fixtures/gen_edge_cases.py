@@ -2,8 +2,8 @@
 
 Usage: python test/fixtures/gen_edge_cases.py OUTDIR
 Writes OUTDIR/edge.txt (short, awkward lines), OUTDIR/long.txt (lines of
-70 KB and 3 MB) and OUTDIR/random.txt (2,500 seeded random lines with
-near-duplicates: ten 256-line batches for the threaded two-phase matcher). Generated rather than committed, so git line-ending
+70 KB and 3 MB) and OUTDIR/random.txt (5,000 seeded random lines with
+near-duplicates: five 1,024-line batches for the threaded two-phase matcher). Generated rather than committed, so git line-ending
 conversion can never touch the CRLF and 0x1A bytes they contain.
 """
 
@@ -49,7 +49,7 @@ def random_lines() -> list[bytes]:
     rng = random.Random(20261124)
     alphabet = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJ0123456789 .,:=/-_\t\r\x0b\x0c\x00\x80\xe9\xff"
     lines: list[bytes] = []
-    for _ in range(2500):
+    for _ in range(5000):
         if lines and rng.random() < 0.5:
             line = bytearray(rng.choice(lines))
             for _ in range(rng.randint(1, 4)):

@@ -448,8 +448,12 @@ int main(int argc, char* argv[]) {
 		// groups can run on several threads (Matcher::addBatch gives the same
 		// result as adding lines one by one). Larger batches give threads
 		// more work per round; smaller ones keep the serial in-batch check
-		// cheap when nearly every line starts a new group.
-		const size_t BATCH_SIZE = 256;
+		// cheap when nearly every line starts a new group. Each batch also
+		// wakes and waits for every thread, which on Windows cost more than
+		// the work on memo-heavy logs: 1024 beat 256 everywhere (272 MB of
+		// logs, 12 threads 2.30 s -> 1.36 s; diverse 24k-240k lines -11% to
+		// -30%), and 4096 lost on diverse input (--best 0.38 s -> 0.65 s).
+		const size_t BATCH_SIZE = 1024;
 		std::vector<std::string> batch;
 		batch.reserve(BATCH_SIZE);
 		for(std::string line; ; ) {
