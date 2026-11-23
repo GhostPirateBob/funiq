@@ -46,6 +46,13 @@ for flags in "-d 3" "-d" "-d 0 -c" "-a -d 2"; do
 	same "long.txt $flags" "$TMP/long.txt" $flags
 done
 
+# --- seeded random lines: ten batches, so the threaded two-phase matcher -----
+# crosses batch boundaries (with --best too)
+for flags in "-d 3 -j 3" "-d 2 --best -c -j 3" "-d -j 2" "-m token-sort -iI -j 2" 	"-m cosine -d 0.2 -j 3" "--rep longest --best -d 2 -c -a -j 4" "-D -d 1 -c" 	"-m normalized-levenshtein -d 0.1 --scores -j 2"; do
+	# shellcheck disable=SC2086
+	same "random.txt $flags" "$TMP/random.txt" $flags
+done
+
 # --- stdin: redirect and pipe ------------------------------------------------
 "$REF" -d -c < "$SYNTH" > "$TMP/ref.out"
 "$CAND" -d -c < "$SYNTH" > "$TMP/cand.out"
@@ -69,9 +76,25 @@ for bad in "-d inf" "-d nan" "--rep sideways" "-x" "-j 99999999999"; do
 	if [ $rr -ne 0 ] && [ $cr -ne 0 ]; then ok "rejects $bad"; else ko "rejects $bad" "exit $rr vs $cr"; fi
 done
 
+# empty or space-led numbers ("opt|value" splits one argument pair)
+for bad in "--distance=" "--threads=" "-j|" "--distance| 1" "-j| 2"; do
+	if [ "${bad#*|}" != "$bad" ]; then pair=("${bad%%|*}" "${bad#*|}"); else pair=("$bad"); fi
+	"$REF" "${pair[@]}" "$SYNTH" >/dev/null 2>&1; rr=$?
+	"$CAND" "${pair[@]}" "$SYNTH" >/dev/null 2>&1; cr=$?
+	if [ $rr -ne 0 ] && [ $cr -ne 0 ]; then ok "rejects '$bad'"; else ko "rejects '$bad'" "exit $rr vs $cr"; fi
+done
+
 # --- version -------------------------------------------------------------------
 rv=$("$REF" --version | awk '{print $2}'); cv=$("$CAND" --version | awk '{print $2}')
 [ "$rv" = "$cv" ] && ok "--version $cv" || ko "--version" "'$rv' vs '$cv'"
+
+# --- --version and -h into a pipe whose reader has gone: quiet exit ---------
+name="--version and -h into a closed pipe leave stderr empty"
+exec 4> >(true)
+sleep 0.5 # let the reader exit first, so the write fails with a broken pipe
+err=$( { "$CAND" --version >&4; "$CAND" -h >&4; } 2>&1 )
+exec 4>&-
+if [ -z "$err" ]; then ok "$name"; else ko "$name" "stderr: $(printf '%s' "$err" | head -c 200)"; fi
 
 # --- broken pipe: quiet exit -------------------------------------------------
 # 3 MB of output into head -1, which exits after the first line.

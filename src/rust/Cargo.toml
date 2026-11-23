@@ -2,6 +2,7 @@
 name = "funiq-rs"
 version = "1.2.0"
 edition = "2024"
+rust-version = "1.85" # edition 2024, Option::is_none_or
 description = "Rust port of funiq (fuzzy uniq) for benchmarking against the C++ original"
 license = "MIT"
 publish = false

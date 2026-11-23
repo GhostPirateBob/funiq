@@ -117,7 +117,9 @@ test-cpp-msvc: build-cpp-msvc
 	bash test/cli_test.sh $(OUT_MSVC)
 
 # --- Rust and Go ports (see docs/superpowers/plans) --------------------------
-RUST_MANIFEST=--manifest-path src/rust/Cargo.toml
+# --target-dir: the copy below must find the binary even if CARGO_TARGET_DIR
+# or build.target-dir points cargo elsewhere
+RUST_MANIFEST=--manifest-path src/rust/Cargo.toml --target-dir src/rust/target
 
 build-rust: | bin
 	$(CARGO) build --release $(RUST_MANIFEST)
@@ -163,7 +165,8 @@ uninstall:
 	@echo "Removed funiq, funiq-rs and funiq-go from $(BINDIR)"
 
 # --- benchmark ---------------------------------------------------------------
-bench: build
+# An MSVC build present in bin/ is rebuilt too, so it is never timed stale.
+bench: build $(if $(wildcard $(OUT_MSVC)),build-cpp-msvc)
 	bash bench/bench.sh $(wildcard $(OUT) $(OUT_MSVC) $(OUT_RUST) $(OUT_GO))
 
 clean:

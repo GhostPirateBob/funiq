@@ -4,7 +4,21 @@ Release notes for funiq, newest first. Versions follow [Semantic Versioning](htt
 
 ## [Unreleased]
 
+### Added
+- Rust and Go ports (`src/rust`, `src/go`) for comparing languages: the same algorithm with
+  byte-identical output, checked by `test/conformance.sh` against the C++ binary (96 cases,
+  including a seeded random corpus); `make bench` times them with hyperfine
+  (`bench/results/`). The C++ binary stays the release.
+- `make build-cpp-msvc` (Windows): the C++ built with Visual Studio's MSVC for comparison
+- The makefile builds, tests and installs every language whose toolchain is present
+  (`make build-<lang>`, `test-<lang>`, `install-<lang>`); sources moved to `src/cpp`
+
 ### Fixed
+- An empty or space-led number for `-d`/`--distance` or `-j`/`--threads` is an argument error.
+  TCLAP read `--distance=` as no value and kept the default 3, so `--distance= -m cosine`
+  merged every line.
+- With `--best --rep longest`, groups that print the same representative keep their creation
+  order on every standard library (`std::sort` left it unspecified)
 - Windows: a `0x1A` (Ctrl-Z) byte no longer ends the input. Text mode treated it as end of
   file, so everything after it was silently dropped, from files and stdin alike. Input is now
   read in binary mode; CRLF input behaves as before.
