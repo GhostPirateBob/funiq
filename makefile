@@ -117,7 +117,16 @@ test-cpp-msvc: build-cpp-msvc
 	bash test/cli_test.sh $(OUT_MSVC)
 
 # --- Rust and Go ports (see docs/superpowers/plans) --------------------------
-build-rust test-rust build-go test-go:
+RUST_MANIFEST=--manifest-path src/rust/Cargo.toml
+
+build-rust: | bin
+	$(CARGO) build --release $(RUST_MANIFEST)
+	cp src/rust/target/release/funiq-rs$(EXE) $(OUT_RUST)
+
+test-rust: build-rust
+	$(CARGO) test --release $(RUST_MANIFEST)
+
+build-go test-go:
 	@echo "$@: not ported yet" && exit 1
 
 # --- install -----------------------------------------------------------------
