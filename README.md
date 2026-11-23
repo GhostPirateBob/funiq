@@ -72,6 +72,8 @@ On 20,000 synthetic nginx lines `-D` turns 13,024 groups into 109, and 5.5s into
 
 On Windows, give funiq the file (`funiq -d -D -c error.log` or `< error.log`) where you can: on 240k log lines a file or `< file` took 254–259 ms, a pipe from a native program (e.g. BusyBox `cat`) 339 ms, and a pipe from Git Bash/MSYS tools (`cat`, `zcat`) 571 ms.
 
+In PowerShell, avoid `Get-Content file | funiq` and pipes from PowerShell functions: PowerShell turns each line into a string and re-encodes it, which is 35–40× slower and changes non-UTF-8 bytes, so the output can differ. A pipe between two native programs (`gzip -dc x.gz | funiq`) keeps the bytes but PowerShell 7 still relays it, about 4× slower on 27 MB; `cmd /c "gzip -dc x.gz | funiq"` gives a real pipe (+30%).
+
 ### Comparison methods
 
 | `-m` | distance | default `-d` | good for |
@@ -131,15 +133,15 @@ On a quiet Linux arm64 VM (4 cores; [full results](bench/results/2026-11-24-linu
 
 | case | C++ (g++ 13) | Rust 1.90 | Go 1.25 |
 |---|---|---|---|
-| `-d 3`, 1 thread | 3.38 s | **2.87 s** | 3.22 s |
-| `-d` (preset), 1 thread | **2.01 s** | 2.22 s | 2.26 s |
-| `-d`, all cores | **579 ms** | 654 ms | 642 ms |
-| `--best -d 3`, 1 thread | 4.30 s | **3.68 s** | 4.19 s |
-| logs `-d -D`, 1 thread (240k) | 492 ms | **222 ms** | 317 ms |
-| 27 MB of `-a` output | 664 ms | **326 ms** | 407 ms |
-| peak memory, logs `-c` | 5.2 MB | **2.8 MB** | 7.8 MB |
+| `-d 3`, 1 thread | 3.16 s | **2.95 s** | 3.27 s |
+| `-d` (preset), 1 thread | **2.01 s** | 2.16 s | 2.27 s |
+| `-d`, all cores | **568 ms** | 638 ms | 644 ms |
+| `--best -d 3`, 1 thread | 4.16 s | **3.78 s** | 4.22 s |
+| logs `-d -D`, 1 thread (240k) | **193 ms** | 223 ms | 310 ms |
+| 27 MB of `-a` output | **308 ms** | 325 ms | 404 ms |
+| peak memory, logs `-c` | 5.2 MB | **2.8 MB** | 8.4 MB |
 
-On the distance kernels the three are within about 10–15% of each other (C++ leads the preset's bit-parallel path, Rust the plain Levenshtein one). The large gaps are per-line overhead: on memo-heavy logs and large output, where each line is a hash lookup and a copy, Rust is about 2× and Go about 1.5× faster than C++, which leaves room in the C++ `normalize`, hash map and `ostream` output. [Windows results](bench/results/2026-11-24-windows-x86_64.md) (MinGW and MSVC C++, Rust, Go) show the same pattern, with ±10–20% noise from a laptop.
+On the distance kernels the three are within about 10–15% of each other (C++ leads the preset's bit-parallel path, Rust the plain Levenshtein one). Before 1.3 the C++ lost memo-heavy logs and large output by about 2× (a locale call per byte in `normalize`, a map node allocated on every memo hit, `ostream` output); 1.3 fixed those and now leads both. [Windows results](bench/results/2026-11-24-windows-x86_64.md) (MinGW and MSVC C++, Rust, Go) agree within the ±10–20% noise of a laptop. Profile-guided optimisation (GCC PGO) was tried and rejected: 4–6% faster on plain Levenshtein, cosine and per-line work, but 11–23% slower on the band kernel (the `-d` preset).
 
 Run it yourself with `make bench` (needs hyperfine; `make build-cpp-msvc` first to include an MSVC build on Windows).
 
