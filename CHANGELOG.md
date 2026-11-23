@@ -2,7 +2,7 @@
 
 Release notes for funiq, newest first. Versions follow [Semantic Versioning](https://semver.org/): a major bump means some output changed.
 
-## [Unreleased]
+## [1.4.0] - 2026-11-24
 
 ### Performance
 - A byte-histogram prefilter skips pairs that can't match before any Levenshtein kernel runs:

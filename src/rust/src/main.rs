@@ -17,7 +17,7 @@ use lines::LineReader;
 use matcher::Matcher;
 use settings::Settings;
 
-const VERSION: &str = "1.3.1";
+const VERSION: &str = "1.4.0";
 /// Lines per batch, as in the C++: each batch's scan runs on all threads.
 const BATCH_SIZE: usize = 1024;
 
