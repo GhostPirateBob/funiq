@@ -175,7 +175,7 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 		}
 	}
 
-	TCLAP::CmdLine cmd("", ' ', "1.2.0");
+	TCLAP::CmdLine cmd("", ' ', "1.3.0");
 
 	// Replace TCLAP's default verbose output with our compact format
 	FuniqOutput customOutput;
@@ -454,11 +454,12 @@ int main(int argc, char* argv[]) {
 		batch.reserve(BATCH_SIZE);
 		for(std::string line; ; ) {
 			bool more = reader.next(line);
-			if(more) batch.push_back(line);
+			if(more) batch.push_back(std::move(line)); // next() clears it
 			if(!batch.empty() && (batch.size() == BATCH_SIZE || !more)) {
-				matcher.addBatch(batch, settings.threads);
 				lineCount += batch.size();
-				batch.clear();
+				matcher.addBatch(std::move(batch), settings.threads);
+				batch.clear(); // moved from: make it empty and usable again
+				batch.reserve(BATCH_SIZE);
 				// Small inputs finish before a bar would mean anything, and the
 				// final newline below is only printed from 50 lines on. At most
 				// 10 redraws a second: memo-heavy input runs thousands of

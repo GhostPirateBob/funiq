@@ -7,7 +7,6 @@
 #include <iostream>
 #include <iomanip>
 #include <functional>
-#include <cctype>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -54,11 +53,11 @@ struct Hit {
 class Matcher {
 public:
 	explicit Matcher(const Settings& settings);
-	void add(const std::string& line);
+	void add(std::string line);
 	// Same result as calling add() on each line in order, but the scan
 	// against groups that existed before the batch runs on up to `threads`
 	// threads.
-	void addBatch(const std::vector<std::string>& lines, unsigned threads);
+	void addBatch(std::vector<std::string> lines, unsigned threads);
 	void show(std::ostream* output) const;
 private:
 	// Width of the -c count column, right-aligned like `uniq -c`.
@@ -89,7 +88,8 @@ private:
 	bool memoEnabled() const { return opts.maxDistance >= 0 && !opts.bestMatch; }
 	Hit lookupMemo(const std::string& normalizedLine) const;
 	Hit findMatch(const Candidate& c, size_t from, size_t to, similarity::Scratch& scratch) const;
-	void place(const std::string& line, Candidate& c, Hit hit);
+	// memoised: the hit came from groupOf, so there is nothing to insert
+	void place(std::string line, Candidate& c, Hit hit, bool memoised);
 	std::string formatScore(double score) const;
 };
 
@@ -109,37 +109,50 @@ inline bool Matcher::lengthRulesOut(unsigned int len, unsigned int keyLen) const
 
 inline Matcher::Matcher(const Settings& settings) : opts(settings) {}
 
+// ASCII classes, as <cctype> gives them in the C locale funiq runs in, but
+// inline: on MinGW/UCRT each <cctype> call is a real call through the locale.
+inline bool asciiDigit(unsigned char c) { return c >= '0' && c <= '9'; }
+inline bool asciiAlnum(unsigned char c) {
+	return asciiDigit(c) || ((c | 0x20) >= 'a' && (c | 0x20) <= 'z');
+}
+inline bool cSpace(unsigned char c) { return c == ' ' || (c >= '\t' && c <= '\r'); }
+
 // Normalize a string according to the current settings: lowercase, collapse
 // digit runs, then either sort its words (-m token-sort; with -I punctuation
-// separates words) or strip non-alphanumerics (-I). Paid once per line.
+// separates words) or strip non-alphanumerics (-I). One pass and one
+// allocation per line: memo-heavy log runs do little else per line.
 inline std::string Matcher::normalize(const std::string& s) const {
-	std::string result = s;
-	if(opts.caseInsensitive)
-		std::transform(result.begin(), result.end(), result.begin(),
-			[](unsigned char c) { return (char)std::tolower(c); });
-	if(opts.maskDigits) {
-		std::string masked;
-		masked.reserve(result.size());
-		for(size_t i = 0; i < result.size(); i++) {
-			bool digit = std::isdigit((unsigned char)result[i]);
-			if(digit && i > 0 && std::isdigit((unsigned char)result[i - 1])) continue;
-			masked += digit ? '0' : result[i];
+	const bool tokenSort = opts.comparisonMethod == TokenSort;
+	const bool punctuation = opts.ignoreNonAlphaNumeric;
+	std::string result;
+	result.reserve(s.size());
+	for(size_t i = 0; i < s.size(); i++) {
+		unsigned char c = s[i];
+		if(opts.maskDigits && asciiDigit(c)) {
+			if(i > 0 && asciiDigit(s[i - 1])) continue; // the run is already one '0'
+			c = '0';
 		}
-		result.swap(masked);
+		if(opts.caseInsensitive && c >= 'A' && c <= 'Z') c += 'a' - 'A';
+		if(punctuation && !asciiAlnum(c)) {
+			if(!tokenSort) continue; // -I: drop it
+			c = ' ';                 // token-sort -I: it separates words
+		}
+		result += (char)c;
 	}
-	if(opts.comparisonMethod == TokenSort) {
-		if(opts.ignoreNonAlphaNumeric)
-			for(auto& c : result) if(!std::isalnum((unsigned char)c)) c = ' ';
-		std::istringstream words(result);
-		std::vector<std::string> tokens;
-		for(std::string w; words >> w; ) tokens.push_back(w);
-		std::sort(tokens.begin(), tokens.end());
-		result.clear();
-		for(size_t i = 0; i < tokens.size(); i++) result += (i ? " " : "") + tokens[i];
-	} else if(opts.ignoreNonAlphaNumeric) {
-		result.erase(std::remove_if(result.begin(), result.end(), [](unsigned char c){
-			return !std::isalnum(c);
-		}), result.end());
+	if(!tokenSort) return result;
+	// the words, split on C whitespace, sorted bytewise, joined by one space
+	std::vector<std::string> tokens;
+	for(size_t i = 0; i < result.size(); ) {
+		while(i < result.size() && cSpace(result[i])) i++;
+		size_t start = i;
+		while(i < result.size() && !cSpace(result[i])) i++;
+		if(i > start) tokens.push_back(result.substr(start, i - start));
+	}
+	std::sort(tokens.begin(), tokens.end());
+	result.clear();
+	for(size_t i = 0; i < tokens.size(); i++) {
+		if(i) result += ' ';
+		result += tokens[i];
 	}
 	return result;
 }
@@ -176,8 +189,10 @@ inline Hit Matcher::findMatch(const Candidate& c, size_t from, size_t to,
 }
 
 // Adds the line to the hit group, or starts a new group if there is none.
-inline void Matcher::place(const std::string& line, Candidate& c, Hit hit) {
-	if(memoEnabled())
+// A memo hit inserts nothing: unordered_map::emplace builds (allocates,
+// copies, hashes) its node before finding the key is already there.
+inline void Matcher::place(std::string line, Candidate& c, Hit hit, bool memoised) {
+	if(memoEnabled() && !memoised)
 		groupOf.emplace(c.normalized, hit.group == NO_GROUP ? Hit(groups.size(), 0) : hit);
 	if(hit.group != NO_GROUP) {
 		MatchGroup& g = groups[hit.group];
@@ -187,31 +202,32 @@ inline void Matcher::place(const std::string& line, Candidate& c, Hit hit) {
 		}
 		g.count++;
 		if(keepMembers()) {
-			g.matches.push_back(line);
+			g.matches.push_back(std::move(line));
 			g.scores.push_back(hit.score);
 		}
 		return;
 	}
 	MatchGroup group;
-	group.key = line;
-	group.normalizedKey = c.normalized;
-	group.profile = std::move(c.profile);
-	group.count = 1;
 	if(opts.representative == RepLongest) group.longest = line;
 	if(keepMembers()) {
 		group.matches.push_back(line);
 		group.scores.push_back(0);
 	}
-	groups.push_back(std::move(group));
+	group.key = std::move(line);
 	keyLengths.push_back(c.normalized.size());
+	group.normalizedKey = std::move(c.normalized);
+	group.profile = std::move(c.profile);
+	group.count = 1;
+	groups.push_back(std::move(group));
 }
 
 // A line joins only one group, so counts sum to the number of lines.
-inline void Matcher::add(const std::string& line) {
+inline void Matcher::add(std::string line) {
 	Candidate c = prepare(line);
 	Hit hit = lookupMemo(c.normalized);
-	if(hit.group == NO_GROUP) hit = findMatch(c, 0, groups.size(), scratch);
-	place(line, c, hit);
+	const bool memoised = hit.group != NO_GROUP;
+	if(!memoised) hit = findMatch(c, 0, groups.size(), scratch);
+	place(std::move(line), c, hit, memoised);
 }
 
 // Two phases, giving exactly the serial result:
@@ -221,10 +237,11 @@ inline void Matcher::add(const std::string& line) {
 //     (all with higher indices). First-match: a phase-1 hit already wins.
 //     --best: a new group wins only if strictly closer (ties go to the
 //     lower index, as in the serial scan).
-inline void Matcher::addBatch(const std::vector<std::string>& lines, unsigned threads) {
+inline void Matcher::addBatch(std::vector<std::string> lines, unsigned threads) {
 	const size_t frozen = groups.size();
 	std::vector<Candidate> candidates(lines.size());
 	std::vector<Hit> hit(lines.size());
+	std::vector<char> memoised(lines.size()); // hit[i] came from groupOf
 
 	const unsigned workers = std::max(1u, threads);
 	if(!pool || pool->size() != workers) {
@@ -237,13 +254,17 @@ inline void Matcher::addBatch(const std::vector<std::string>& lines, unsigned th
 		for(size_t i; (i = next++) < lines.size(); ) {
 			candidates[i] = prepare(lines[i]);
 			Hit memo = lookupMemo(candidates[i].normalized);
-			hit[i] = (memo.group != NO_GROUP) ? memo : findMatch(candidates[i], 0, frozen, own);
+			memoised[i] = memo.group != NO_GROUP;
+			hit[i] = memoised[i] ? memo : findMatch(candidates[i], 0, frozen, own);
 		}
 	});
 
 	for(size_t i = 0; i < lines.size(); i++) {
-		Hit h = lookupMemo(candidates[i].normalized); // an earlier line in this batch may have memoised it
-		if(h.group == NO_GROUP) {
+		// A phase-1 memo hit stands: memo entries never change. Otherwise an
+		// earlier line in this batch may have memoised it since.
+		Hit h = memoised[i] ? hit[i] : lookupMemo(candidates[i].normalized);
+		const bool fromMemo = h.group != NO_GROUP;
+		if(!fromMemo) {
 			h = hit[i];
 			if(opts.bestMatch) {
 				Hit later = findMatch(candidates[i], frozen, groups.size(), scratch);
@@ -252,7 +273,7 @@ inline void Matcher::addBatch(const std::vector<std::string>& lines, unsigned th
 				h = findMatch(candidates[i], frozen, groups.size(), scratch);
 			}
 		}
-		place(lines[i], candidates[i], h);
+		place(std::move(lines[i]), candidates[i], h, fromMemo);
 	}
 }
 
@@ -280,37 +301,42 @@ inline void Matcher::show(std::ostream* output) const {
 
 	// Colour adds SGR codes around fields and changes nothing else, so the
 	// output with codes stripped is byte-identical to the plain output.
+	// Each row is built in one buffer and written once: no stream insertion
+	// per field, and with colour off no copy of each member.
 	const bool on = opts.color;
 	const bool all = keepMembers();
-	for(const Row& row : rows) {
-		const MatchGroup& group = *row.group;
+	std::string row;
+	for(const Row& r : rows) {
+		const MatchGroup& group = *r.group;
+		row.clear();
 		if(opts.showTotals) {
 			// Pad first, then colour, so codes don't disturb the alignment.
 			// Frequency buckets make the hot lines of a log jump out.
 			const size_t n = group.count;
-			std::ostringstream count;
-			count << std::setw(countWidth) << n;
+			std::string count = std::to_string(n);
+			if(count.size() < (size_t)countWidth) count.insert(0, countWidth - count.size(), ' ');
 			const color::Style& style = n >= 100 ? color::BoldRed : n >= 10 ? color::Yellow
 			                          : n >= 2 ? color::Green : color::Gray;
-			*output << color::paint(on, style, count.str()) << " "; // uniq -c also separates count and line with one space
+			color::paintTo(row, on, style, count);
+			row += ' '; // uniq -c also separates count and line with one space
 		}
-		*output << *row.rep;
+		row += *r.rep;
 		if(all) {
 			for(size_t j = 0; j < group.matches.size(); j++) {
-				if(j == row.repAt) continue;
-				*output << "\t" << color::paint(on, color::Dim, group.matches[j]);
+				if(j == r.repAt) continue;
+				row += '\t';
+				color::paintTo(row, on, color::Dim, group.matches[j]);
 				if(opts.showScores) {
 					// Green: well inside the threshold; yellow: near its edge.
 					bool close = group.scores[j] <= opts.maxDistance / 2.0;
-					*output << " " << color::paint(on, close ? color::Green : color::Yellow,
-					                               "(" + formatScore(group.scores[j]) + ")");
+					row += ' ';
+					color::paintTo(row, on, close ? color::Green : color::Yellow,
+					               "(" + formatScore(group.scores[j]) + ")");
 				}
 			}
 		}
-		// Use '\n' instead of std::endl to avoid flushing the output
-		// buffer on every line, which is significantly faster when
-		// piping to other commands.
-		*output << '\n';
+		row += '\n';
+		output->write(row.data(), row.size());
 	}
 }
 

@@ -2,7 +2,7 @@
 
 Release notes for funiq, newest first. Versions follow [Semantic Versioning](https://semver.org/): a major bump means some output changed.
 
-## [Unreleased]
+## [1.3.0] - 2026-11-24
 
 ### Added
 - Rust and Go ports (`src/rust`, `src/go`) for comparing languages: the same algorithm with
@@ -31,6 +31,10 @@ Release notes for funiq, newest first. Versions follow [Semantic Versioning](htt
 - Windows: `2>NUL` no longer pre-reads the whole input file for an invisible progress bar
 
 ### Performance
+- Per-line overhead roughly halved: normalisation is one pass with inline ASCII tests (MinGW's
+  `<cctype>` calls go through the locale), memo hits no longer allocate a map node, lines are
+  moved instead of copied, and output is written a row at a time with no copies when colour is
+  off. Memo-heavy logs (`-d -D`, 240k lines) 540 -> 284 ms; 27 MB of `-a` output 807 -> 377 ms.
 - Levenshtein comparisons use Hyyrö's bit-parallel algorithm: a 64-bit word holds the whole
   band of 2k + 1 diagonals (k up to 31), or a whole DP column for a side of at most 64 bytes,
   so a step costs a dozen word operations however large k is. On 24k log lines: `--default`
