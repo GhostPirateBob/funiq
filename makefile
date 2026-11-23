@@ -128,8 +128,11 @@ test-rust: build-rust
 	bash test/conformance.sh $(OUT) $(OUT_RUST) > bin/conformance-rust.log || (grep -A1 "^FAIL" bin/conformance-rust.log; tail -1 bin/conformance-rust.log; exit 1)
 	@tail -1 bin/conformance-rust.log
 
-build-go test-go:
-	@echo "$@: not ported yet" && exit 1
+build-go: | bin
+	cd src/go && CGO_ENABLED=0 $(GO) build -trimpath -o ../../$(OUT_GO) .
+
+test-go: build-go
+	cd src/go && $(GO) vet ./... && $(GO) test ./...
 
 # --- install -----------------------------------------------------------------
 # Install every binary that `make build` produces (or one with install-<lang>).
