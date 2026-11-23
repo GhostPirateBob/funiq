@@ -118,7 +118,8 @@ Use literal paths in such one-liners: a variable that ends up empty turns `cd $D
    | `funiq-X.Y.Z-linux-x86_64.tar.gz` | fully static (`LDFLAGS=-static`) |
    | `funiq-X.Y.Z-linux-arm64.tar.gz` | fully static |
    | `funiq-X.Y.Z-windows-x86_64.zip` | static MinGW |
-   | `funiq-X.Y.Z-macos-universal.tar.gz` | arm64 and x86_64 in one binary |
+
+   There is no macOS archive since 1.3.1 (GitHub's macOS runners rarely picked the job up); `make` builds a native one.
 
 4. The release job writes `SHA256SUMS`, attests build provenance for every archive, and creates a **draft** release whose notes are the CHANGELOG section.
 5. Check the draft, then publish it: `gh release edit vX.Y.Z --draft=false`.
