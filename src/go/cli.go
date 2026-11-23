@@ -57,6 +57,17 @@ func canonical(token string) string {
 	return ""
 }
 
+// asciiLower lowercases A-Z only, like C tolower in the C locale.
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
+}
+
 // isCNumber reports whether C strtod would consume all of s (decimal or hex
 // floats, inf, infinity, nan, after optional leading whitespace): it decides
 // what a bare -d is followed by, exactly as the C++ binary does.
@@ -65,7 +76,7 @@ func isCNumber(s string) bool {
 	if len(t) > 0 && (t[0] == '+' || t[0] == '-') {
 		t = t[1:]
 	}
-	u := strings.ToLower(t)
+	u := asciiLower(t) // spec §4: ASCII only, never Unicode case mapping
 	if u == "" {
 		return false
 	}
