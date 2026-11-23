@@ -104,6 +104,6 @@ Measured on synthetic nginx lines, with identical output at every step:
 | 1 MiB input/output buffers | 11–19% |
 | bit-parallel Levenshtein (24k lines, single-threaded) | `--default` 4.2×, `-d 3` 1.7× |
 
-Pipes on Windows: an MSYS/Cygwin program (Git Bash's `cat`, `zcat`) writing into a native one runs at about 8 MB/s, whatever the reader does (`rg` is just as slow). From a native writer, or a file, funiq reads at full speed.
+Pipes on Windows (1.3.1, 27 MB, `-d -D -j 1`): file argument 254 ms, `< file` 259 ms, a native writer through a pipe 339 ms, an MSYS/Cygwin writer (Git Bash `cat`) 571 ms. With 512-byte reads (1.2.0) the MSYS pipe ran at about 8 MB/s (3.5 s), and so did `rg` reading it: the reader's request size matters on Cygwin pipes, and funiq's 1 MiB reads fixed most of it.
 
 Tried and rejected: a length-bucket index. Gathering and sorting candidates cost about as much as the length checks it skipped (0.8–1.2×). Also avoided: `thread_local` scratch buffers. In static MinGW builds their destructors ran after the emulated-TLS block was freed, corrupting the heap at thread exit. Ideas not yet tried are in TODO.md.
