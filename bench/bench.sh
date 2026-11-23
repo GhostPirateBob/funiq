@@ -95,7 +95,8 @@ for c in "${cases[@]}"; do
 		fi
 	done
 	cmds=()
-	for b in "${bins[@]}"; do cmds+=(-n "$(basename "$b" .exe)" "$(native "$b") $args $(native "$file")"); done
+	# hyperfine -N splits each command like a shell would: quote the paths
+	for b in "${bins[@]}"; do cmds+=(-n "$(basename "$b" .exe)" "\"$(native "$b")\" $args \"$(native "$file")\""); done
 	output_mode=null
 	case $args in *" -a "*) output_mode=pipe ;; esac
 	echo "bench: $label ($input)" >&2
@@ -108,8 +109,14 @@ done
 if [ -f "$DATA/240k.log" ]; then
 	{ echo; echo "## Peak memory: logs \`-d -D -c -j 1\` (240k)"; echo; echo "| binary | peak MB |"; echo "|---|---:|"; } >> "$out"
 	for b in "${bins[@]}"; do
+		# measured with /usr/bin/time outside Windows; '?' rather than aborting
+		# (set -e) after all the timings when it isn't installed
+		if [ "$os" != windows ] && [ ! -x /usr/bin/time ]; then
+			echo "| $(basename "$b" .exe) | ? (no /usr/bin/time) |" >> "$out"
+			continue
+		fi
 		case $os in
-			windows) mb=$(pwsh.exe -NoLogo -NoProfile -File "$(native "$DIR/peakmem.ps1")" "$(native "$b")" "$(native "$DATA/240k.log") -d -D -c -j 1" | tr -d '\r') ;;
+			windows) mb=$(pwsh.exe -NoLogo -NoProfile -File "$(native "$DIR/peakmem.ps1")" "$(native "$b")" "$(native "$DATA/240k.log")" " -d -D -c -j 1" | tr -d '\r') ;;
 			linux) mb=$( { /usr/bin/time -f %M "$b" -d -D -c -j 1 "$DATA/240k.log" > /dev/null; } 2>&1 | tail -1 | awk '{printf "%.1f", $1 / 1024}') ;;
 			macos) mb=$( { /usr/bin/time -l "$b" -d -D -c -j 1 "$DATA/240k.log" > /dev/null; } 2>&1 | awk '/maximum resident/ {printf "%.1f", $1 / 1048576}') ;;
 			*) mb="?" ;;

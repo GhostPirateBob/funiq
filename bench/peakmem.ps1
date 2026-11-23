@@ -1,10 +1,12 @@
 # Peak working set of one run, in MB:
-#   pwsh -NoProfile -File bench/peakmem.ps1 <absolute exe> "<file> <args...>"
+#   pwsh -NoProfile -File bench/peakmem.ps1 <absolute exe> <file> " <args...>"
 # Windows has no /usr/bin/time -v. GetProcessMemoryInfo on the process
 # handle still works after exit, unlike .NET's Process.PeakWorkingSet64.
-# The arguments travel as one string with the FILENAME FIRST: pwsh -File
-# binds a leading "-d" (and, case-insensitively, "-D") as its own parameter.
-param([Parameter(Mandatory)][string]$Exe, [Parameter(Mandatory)][string]$ArgLine)
+# The file is its own argument (paths may contain spaces). The funiq flags
+# travel as one string starting with a SPACE: pwsh -File would bind a
+# leading "-d" (and, case-insensitively, "-D") as one of its own parameters.
+param([Parameter(Mandatory)][string]$Exe, [Parameter(Mandatory)][string]$File,
+      [Parameter(Mandatory)][string]$Flags)
 $ErrorActionPreference = "Stop"
 Add-Type -Namespace W -Name P -MemberDefinition @'
 [StructLayout(LayoutKind.Sequential)] public struct PMC {
@@ -14,7 +16,8 @@ Add-Type -Namespace W -Name P -MemberDefinition @'
 [DllImport("psapi.dll")] public static extern bool GetProcessMemoryInfo(IntPtr h, out PMC c, uint cb);
 '@
 $psi = [Diagnostics.ProcessStartInfo]::new($Exe)
-foreach ($a in $ArgLine -split " ") { $psi.ArgumentList.Add($a) }
+$psi.ArgumentList.Add($File)
+foreach ($a in $Flags.Trim() -split " +") { $psi.ArgumentList.Add($a) }
 $psi.RedirectStandardOutput = $true; $psi.UseShellExecute = $false
 $p = [Diagnostics.Process]::Start($psi); $h = $p.Handle
 $null = $p.StandardOutput.BaseStream.CopyToAsync([IO.Stream]::Null)
