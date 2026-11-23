@@ -43,6 +43,22 @@ else
 	ok "$name"
 fi
 
+# --- every input byte is data ------------------------------------------------
+# Windows text mode ends input at a 0x1A (Ctrl-Z) byte, which turns up in
+# scanner junk in real logs; funiq used to drop the rest of the file there.
+name="a 0x1A byte does not end the input (file and stdin)"
+printf 'alpha\nbra\032vo\ncharlie\ndelta\n' > "$TMP/ctrlz.txt"
+n1=$("$FUNIQ" -d 0 "$TMP/ctrlz.txt" | wc -l); n2=$("$FUNIQ" -d 0 < "$TMP/ctrlz.txt" | wc -l)
+if [ "$n1" -eq 4 ] && [ "$n2" -eq 4 ]; then ok "$name"; else ko "$name" "file: $n1 lines, stdin: $n2 lines, want 4"; fi
+
+# CRLF input keeps its platform behaviour: Windows drops the \r (as text mode
+# did), other platforms keep it as part of the line, like uniq.
+name="CRLF input: \\r dropped on Windows, kept elsewhere"
+if [ "${OS:-}" = "Windows_NT" ]; then want='a\nb\n'; else want='a\r\nb\r\n'; fi
+got=$(printf 'a\r\nb\r\n' | "$FUNIQ" -d 0 | od -An -c | tr -d ' \n')
+exp=$(printf "$want" | od -An -c | tr -d ' \n')
+if [ "$got" = "$exp" ]; then ok "$name"; else ko "$name" "got $got, want $exp"; fi
+
 # --- normalized method gets a sane default threshold ------------------------
 # Without -d, the old default of 3 made every normalized comparison match.
 name="-m normalized-levenshtein without -d does not collapse distinct lines"

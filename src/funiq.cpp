@@ -267,8 +267,20 @@ void parseCommandLine(int argc, char** argv, std::string& filename, Settings& se
 
 // Read from file if a filename is provided, otherwise read from stdin.
 // Returns a file stream if applicable, leaving the caller to manage its lifetime.
+// One input line. Input is read in binary mode everywhere; on Windows a
+// trailing \r is dropped, exactly what text mode's CRLF -> LF did before.
+// Elsewhere the \r stays part of the line, like uniq.
+static bool readLine(std::istream& in, std::string& line) {
+	if(!getline(in, line)) return false;
+#ifdef _WIN32
+	if(!line.empty() && line[line.size() - 1] == '\r') line.erase(line.size() - 1);
+#endif
+	return true;
+}
+
+// Binary mode: Windows text mode ends input at the first 0x1A (Ctrl-Z) byte.
 std::ifstream getFileInput(const std::string& filename) {
-	return std::ifstream(filename.c_str());
+	return std::ifstream(filename.c_str(), std::ios::in | std::ios::binary);
 }
 
 int main(int argc, char* argv[]) {
@@ -281,6 +293,9 @@ int main(int argc, char* argv[]) {
 	// Text-mode stdout turns every '\n' into "\r\n" on Windows, which leaks
 	// a stray \r into downstream sed/awk/bat pipelines. Emit LF like uniq.
 	_setmode(_fileno(stdout), _O_BINARY);
+	// Text-mode stdin ends input at the first 0x1A (Ctrl-Z) byte, which
+	// silently dropped the rest of a log. Read bytes; see readLine for CRLF.
+	_setmode(_fileno(stdin), _O_BINARY);
 #endif
 
 	// Disable C/C++ I/O synchronization for faster stdin/stdout throughput
@@ -374,7 +389,7 @@ int main(int argc, char* argv[]) {
 		std::vector<std::string> batch;
 		batch.reserve(BATCH_SIZE);
 		for(std::string line; ; ) {
-			bool more = static_cast<bool>(getline(inputStream, line));
+			bool more = readLine(inputStream, line);
 			if(more) batch.push_back(line);
 			if(!batch.empty() && (batch.size() == BATCH_SIZE || !more)) {
 				matcher.addBatch(batch, settings.threads);
