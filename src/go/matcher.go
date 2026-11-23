@@ -27,6 +27,7 @@ var miss = hit{group: noGroup}
 type candidate struct {
 	normalized []byte
 	profile    profile
+	histogram  *byteHistogram // built only when a scan needs it (not on memo hits)
 }
 
 // group: the first line (the key matching compares against), its normalized
@@ -45,8 +46,9 @@ type group struct {
 type Matcher struct {
 	opts       Settings
 	groups     []group
-	groupOf    map[string]hit // normalized line -> where it went (first-match only)
-	keyLengths []uint32       // keyLengths[i] == len(groups[i].normalizedKey)
+	groupOf    map[string]hit  // normalized line -> where it went (first-match only)
+	keyLengths []uint32        // keyLengths[i] == len(groups[i].normalizedKey)
+	keyHists   []byteHistogram // keyHists[i]: groups[i].normalizedKey's byte counts (not for cosine)
 	scratch    *scratch
 	workers    []*scratch // one per worker goroutine, kept across batches
 }
@@ -120,6 +122,17 @@ func (m *Matcher) keepMembers() bool { return m.opts.ShowAll || m.opts.ShowScore
 // line, and --best can prefer a newer group, so neither may memoise.
 func (m *Matcher) memoEnabled() bool { return m.opts.MaxDistance >= 0 && !m.opts.Best }
 
+func (m *Matcher) usesHistogram() bool { return m.opts.Method != Cosine }
+
+// prepareScan builds the candidate's histogram before a scan, if the method
+// uses one.
+func (m *Matcher) prepareScan(c *candidate) {
+	if m.usesHistogram() && c.histogram == nil {
+		c.histogram = new(byteHistogram)
+		buildHistogram(c.normalized, c.histogram)
+	}
+}
+
 func (m *Matcher) prepare(line []byte) candidate {
 	c := candidate{normalized: normalize(line, &m.opts)}
 	if m.opts.Method == Cosine {
@@ -179,12 +192,18 @@ func (m *Matcher) distanceTo(c *candidate, i int, s *scratch) (float64, bool) {
 		if budget < float64(maxLen) {
 			k = uint32(budget) + 1
 		}
+		if histogramExceeds(c.histogram, &m.keyHists[i], k) {
+			return 0, false
+		}
 		ratio := float32(boundedLevenshtein(c.normalized, g.normalizedKey, k, s)) / float32(maxLen)
 		return float64(ratio), ratio <= d
 	}
 	k := maxLen
 	if d < float32(maxLen) {
 		k = uint32(d)
+	}
+	if histogramExceeds(c.histogram, &m.keyHists[i], k) {
+		return 0, false
 	}
 	dist := boundedLevenshtein(c.normalized, g.normalizedKey, k, s)
 	return float64(dist), float32(dist) <= d
@@ -248,6 +267,9 @@ func (m *Matcher) place(line []byte, c candidate, h hit) {
 	}
 	m.groups = append(m.groups, g)
 	m.keyLengths = append(m.keyLengths, uint32(len(c.normalized)))
+	if c.histogram != nil { // only memo misses start groups, and they have one
+		m.keyHists = append(m.keyHists, *c.histogram)
+	}
 }
 
 // Add groups one line; a line joins only one group, so counts sum to the
@@ -256,6 +278,7 @@ func (m *Matcher) Add(line []byte) {
 	c := m.prepare(line)
 	h := m.lookupMemo(c.normalized)
 	if h.group == noGroup {
+		m.prepareScan(&c)
 		h = m.findMatch(&c, 0, len(m.groups), m.scratch)
 	}
 	m.place(line, c, h)
@@ -274,6 +297,7 @@ func (m *Matcher) AddBatch(lines [][]byte) {
 		if memo := m.lookupMemo(cands[i].normalized); memo.group != noGroup {
 			hits[i] = memo
 		} else {
+			m.prepareScan(&cands[i]) // phase 2 reuses it
 			hits[i] = m.findMatch(&cands[i], 0, frozen, s)
 		}
 	}

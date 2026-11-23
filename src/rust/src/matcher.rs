@@ -9,7 +9,9 @@ use std::sync::Mutex;
 use rayon::prelude::*;
 
 use crate::settings::{Method, Rep, Settings};
-use crate::similarity::{bounded_levenshtein, cosine_distance, trigram_profile, Profile, Scratch};
+use crate::similarity::{
+    bounded_levenshtein, build_histogram, cosine_distance, histogram_bound, trigram_profile, ByteHistogram, Profile, Scratch,
+};
 
 const NO_GROUP: usize = usize::MAX;
 
@@ -26,6 +28,9 @@ const MISS: Hit = Hit { group: NO_GROUP, score: 0.0 };
 struct Candidate {
     normalized: Vec<u8>,
     profile: Profile,
+    /// built only when a scan needs it (not on memo hits): boxed, so a line
+    /// carries 8 bytes rather than 128
+    histogram: Option<Box<ByteHistogram>>,
 }
 
 /// The first line (the key matching compares against), its normalized form
@@ -94,6 +99,9 @@ pub struct Matcher {
     /// key_lengths[i] == groups[i].normalized_key.len(), contiguous for the
     /// length pre-check
     key_lengths: Vec<u32>,
+    /// key_histograms[i]: groups[i].normalized_key's byte counts, for the
+    /// prefilter (empty for -m cosine, which has no edit budget)
+    key_histograms: Vec<ByteHistogram>,
     scratch: Scratch,
     /// add_batch's threads, built once, each with its own persistent scratch
     pool: Option<rayon::ThreadPool>,
@@ -110,6 +118,7 @@ impl Matcher {
             groups: Vec::new(),
             group_of: HashMap::new(),
             key_lengths: Vec::new(),
+            key_histograms: Vec::new(),
             scratch: Scratch::new(),
             pool_scratch: (0..if pool.is_some() { threads } else { 0 }).map(|_| Mutex::new(Scratch::new())).collect(),
             pool,
@@ -129,7 +138,25 @@ impl Matcher {
     fn prepare(&self, line: &[u8]) -> Candidate {
         let normalized = normalize(line, &self.opts);
         let profile = if self.opts.method == Method::Cosine { trigram_profile(&normalized) } else { Profile::default() };
-        Candidate { normalized, profile }
+        Candidate { normalized, profile, histogram: None }
+    }
+
+    fn uses_histogram(&self) -> bool {
+        self.opts.method != Method::Cosine
+    }
+
+    /// Before a scan: the candidate's histogram, if the method uses one.
+    fn prepare_scan(&self, c: &mut Candidate) {
+        if self.uses_histogram() && c.histogram.is_none() {
+            c.histogram = Some(Box::new(build_histogram(&c.normalized)));
+        }
+    }
+
+    /// The candidate can't be within k edits of group i (byte counts differ
+    /// by more than k).
+    fn histogram_rules_out(&self, c: &Candidate, i: usize, k: u32) -> bool {
+        let h = c.histogram.as_deref().expect("prepare_scan runs before a scan");
+        histogram_bound(h, &self.key_histograms[i]) > k
     }
 
     fn lookup_memo(&self, normalized: &[u8]) -> Hit {
@@ -175,10 +202,16 @@ impl Matcher {
             // test has the final say
             let budget = f64::from(d) * f64::from(max_len);
             let k = if budget >= f64::from(max_len) { max_len } else { budget as u32 + 1 };
+            if self.histogram_rules_out(c, i, k) {
+                return None;
+            }
             let ratio = bounded_levenshtein(s1, s2, k, scratch) as f32 / max_len as f32;
             return (ratio <= d).then_some(f64::from(ratio));
         }
         let k = if d >= max_len as f32 { max_len } else { d as u32 };
+        if self.histogram_rules_out(c, i, k) {
+            return None;
+        }
         let dist = bounded_levenshtein(s1, s2, k, scratch);
         (dist as f32 <= d).then_some(f64::from(dist))
     }
@@ -227,6 +260,9 @@ impl Matcher {
             return;
         }
         self.key_lengths.push(c.normalized.len() as u32);
+        if let Some(h) = c.histogram {
+            self.key_histograms.push(*h); // only memo misses start groups, and they have one
+        }
         self.groups.push(Group {
             longest: if longest { line.clone() } else { Vec::new() },
             longest_at: 0,
@@ -243,9 +279,10 @@ impl Matcher {
     /// The serial path: the binary uses add_batch, the tests compare the two.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn add(&mut self, line: Vec<u8>) {
-        let c = self.prepare(&line);
+        let mut c = self.prepare(&line);
         let mut hit = self.lookup_memo(&c.normalized);
         if hit.group == NO_GROUP {
+            self.prepare_scan(&mut c);
             let mut scratch = std::mem::take(&mut self.scratch);
             hit = self.find_match(&c, 0, self.groups.len(), &mut scratch);
             self.scratch = scratch;
@@ -260,9 +297,14 @@ impl Matcher {
     pub fn add_batch(&mut self, lines: Vec<Vec<u8>>) {
         let frozen = self.groups.len();
         let phase1 = |this: &Matcher, line: &Vec<u8>, scratch: &mut Scratch| {
-            let c = this.prepare(line);
+            let mut c = this.prepare(line);
             let memo = this.lookup_memo(&c.normalized);
-            let hit = if memo.group != NO_GROUP { memo } else { this.find_match(&c, 0, frozen, scratch) };
+            let hit = if memo.group != NO_GROUP {
+                memo
+            } else {
+                this.prepare_scan(&mut c); // phase 2 reuses it
+                this.find_match(&c, 0, frozen, scratch)
+            };
             (c, hit)
         };
         let prepared: Vec<(Candidate, Hit)> = match &self.pool {

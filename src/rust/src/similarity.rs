@@ -267,6 +267,31 @@ pub fn cosine_distance(a: &Profile, b: &Profile) -> f64 {
     if distance < 0.0 { 0.0 } else { distance } // rounding can dip just below 0
 }
 
+/// Byte counts of a string, bucketed by c & 127 and saturating at 255: a
+/// cheap lower bound on the edit distance (see histogram_bound), as in the C++.
+pub type ByteHistogram = [u8; 128];
+
+pub fn build_histogram(s: &[u8]) -> ByteHistogram {
+    let mut h = [0u8; 128];
+    for &c in s {
+        let n = &mut h[usize::from(c & 127)];
+        *n = n.saturating_add(1);
+    }
+    h
+}
+
+/// max(P, N), P and N the surplus counts on either side: each edit moves P
+/// and N by at most one, and folding or saturating counts only lowers them.
+/// A plain loop: LLVM vectorises it (saturating subtracts and widening adds).
+pub fn histogram_bound(a: &ByteHistogram, b: &ByteHistogram) -> u32 {
+    let (mut p, mut n) = (0u32, 0u32);
+    for i in 0..128 {
+        p += u32::from(a[i].saturating_sub(b[i]));
+        n += u32::from(b[i].saturating_sub(a[i]));
+    }
+    p.max(n)
+}
+
 #[cfg(test)]
 #[path = "similarity_tests.rs"]
 mod tests;

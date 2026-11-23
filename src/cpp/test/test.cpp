@@ -177,6 +177,43 @@ TEST_CASE( "boundedLevenshtein agrees with the reference on long strings and wid
 	}
 }
 
+static unsigned int histogramBoundOf(const std::string& a, const std::string& b) {
+	similarity::ByteHistogram ha, hb;
+	similarity::buildHistogram(a, ha);
+	similarity::buildHistogram(b, hb);
+	return similarity::histogramBound(ha, hb);
+}
+
+TEST_CASE( "histogramBound: max of the surplus bytes on either side", "[histogram]" ) {
+	REQUIRE(histogramBoundOf("", "") == 0);
+	REQUIRE(histogramBoundOf("abc", "abd") == 1);      // one substitution
+	REQUIRE(histogramBoundOf("aaaa", "") == 4);        // four deletions
+	REQUIRE(histogramBoundOf("abc", "cba") == 0);      // an anagram: counts can't tell
+	REQUIRE(histogramBoundOf("aab", "abbbb") == 3);    // surplus a:1, b:3 -> max(1, 3)
+	REQUIRE(histogramBoundOf("\x80", std::string(1, '\0')) == 0); // bytes fold to c & 127
+	// counts saturate at 255: still a lower bound, just weaker
+	REQUIRE(histogramBoundOf(std::string(300, 'a'), "") == 255);
+}
+
+TEST_CASE( "histogramBound never exceeds the edit distance", "[histogram]" ) {
+	// The prefilter skips a pair when this bound exceeds the budget, so it
+	// must be a true lower bound or a real match would be lost.
+	std::mt19937 rng(20261124);
+	const std::string alphabets[] = {"ab", "abcdefghijklmnopqrstuvwxyz0123456789 .:/-",
+	                                 std::string("a\x80\xff\x01\x7f", 5)};
+	for(int iter = 0; iter < 20000; iter++) {
+		const std::string& alphabet = alphabets[iter % 3];
+		std::string a, b;
+		size_t la = rng() % (iter % 50 == 0 ? 700 : 80), lb = rng() % (iter % 50 == 0 ? 700 : 80);
+		for(size_t i = 0; i < la; i++) a += alphabet[rng() % alphabet.size()];
+		b = a.substr(0, std::min(la, lb)); // related pairs too, not just random ones
+		for(size_t i = b.size(); i < lb; i++) b += alphabet[rng() % alphabet.size()];
+		for(int e = rng() % 4; e > 0 && !b.empty(); e--) b[rng() % b.size()] = alphabet[rng() % alphabet.size()];
+		INFO("a=\"" << a << "\" b=\"" << b << "\"");
+		REQUIRE(histogramBoundOf(a, b) <= referenceLevenshtein(a, b));
+	}
+}
+
 TEST_CASE( "a repeated line joins the same group as its first occurrence", "[matcher]" ) {
 	Settings settings;
 	settings.maxDistance = 1;

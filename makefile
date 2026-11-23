@@ -31,6 +31,14 @@ ifneq (,$(findstring mingw,$(shell $(CXX) -dumpmachine)))
   LDFLAGS+=-static
 endif
 
+# GCC: align functions and loops, so a change elsewhere can't move the hot
+# per-line loop to an unlucky address (measured: the byte-histogram change left
+# the memo-heavy log case 7% slower purely from placement; aligned, the old and
+# new code tie, and no case is slower). Clang rejects -falign-jumps.
+ifeq (,$(findstring clang,$(shell $(CXX) --version 2>/dev/null)))
+  OPT_FLAG+=-falign-functions=64 -falign-loops=32 -falign-jumps=32
+endif
+
 CPP_INCLUDES=-Isrc/cpp -Ilib
 OUT=bin/funiq$(EXE)
 OUT_TEST=bin/funiq_test$(EXE)
@@ -101,8 +109,14 @@ $(OUT): src/cpp/funiq.cpp $(HEADERS) | bin
 $(OUT_TEST): src/cpp/test/test.cpp $(HEADERS) | bin
 	$(CXX) $(CXXFLAGS) $(CPP_INCLUDES) src/cpp/test/test.cpp -o $(OUT_TEST) $(LDFLAGS)
 
-test-cpp: $(OUT) $(OUT_TEST)
+# the histogram bound's plain-C fallback (SSE2/NEON are what the build uses)
+OUT_TEST_SCALAR=bin/funiq_test_scalar$(EXE)
+$(OUT_TEST_SCALAR): src/cpp/test/test.cpp $(HEADERS) | bin
+	$(CXX) $(CXXFLAGS) -DFUNIQ_HISTOGRAM_SCALAR $(CPP_INCLUDES) src/cpp/test/test.cpp -o $(OUT_TEST_SCALAR) $(LDFLAGS)
+
+test-cpp: $(OUT) $(OUT_TEST) $(OUT_TEST_SCALAR)
 	$(OUT_TEST)
+	$(OUT_TEST_SCALAR) "[histogram]"
 	bash test/cli_test.sh $(OUT)
 	@# the conformance harness against itself: proves the harness runs here
 	bash test/conformance.sh $(OUT) $(OUT) > bin/conformance-cpp.log || (tail -20 bin/conformance-cpp.log; exit 1)
@@ -170,7 +184,7 @@ bench: build $(if $(wildcard $(OUT_MSVC)),build-cpp-msvc)
 	bash bench/bench.sh $(wildcard $(OUT) $(OUT_MSVC) $(OUT_RUST) $(OUT_GO))
 
 clean:
-	rm -f $(OUT) $(OUT_TEST) $(OUT_MSVC) $(OUT_RUST) $(OUT_GO)
+	rm -f $(OUT) $(OUT_TEST) $(OUT_TEST_SCALAR) $(OUT_MSVC) $(OUT_RUST) $(OUT_GO)
 	rm -rf bin/msvc-obj
 	@if [ -f src/rust/Cargo.toml ] && $(CARGO) --version >/dev/null 2>&1; then $(CARGO) clean --manifest-path src/rust/Cargo.toml; fi
 

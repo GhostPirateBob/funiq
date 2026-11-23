@@ -3,6 +3,7 @@ package main
 import (
 	"math"
 	"math/rand/v2"
+	"strings"
 	"testing"
 )
 
@@ -207,5 +208,72 @@ func TestTrigramsArePackedExactly(t *testing.T) {
 		!eq(trigramProfile([]byte("a")), []gram{{1<<24 | 1<<16 | 0x61<<8, 1}}) ||
 		len(trigramProfile(nil).grams) != 0 || trigramProfile([]byte("aaaa")).norm != 2 {
 		t.Fatal("trigram packing")
+	}
+}
+
+func histogramBoundOf(a, b string) uint32 {
+	var ha, hb byteHistogram
+	buildHistogram([]byte(a), &ha)
+	buildHistogram([]byte(b), &hb)
+	return histogramBound(&ha, &hb)
+}
+
+func TestHistogramBoundIsTheLargerSurplus(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want uint32
+	}{
+		{"", "", 0},
+		{"abc", "abd", 1},                   // one substitution
+		{"aaaa", "", 4},                     // four deletions
+		{"abc", "cba", 0},                   // an anagram: counts can't tell
+		{"aab", "abbbb", 3},                 // surplus a:1, b:3
+		{"\x80", "\x00", 0},                 // bytes fold to c & 127
+		{strings.Repeat("a", 300), "", 255}, // counts saturate
+	}
+	for _, c := range cases {
+		if got := histogramBoundOf(c.a, c.b); got != c.want {
+			t.Errorf("histogramBound(%q, %q) = %d, want %d", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+// The prefilter skips a pair when this bound exceeds the budget, so it must
+// never exceed the edit distance or a real match would be lost.
+func TestHistogramBoundNeverExceedsTheEditDistance(t *testing.T) {
+	rng := rand.New(rand.NewPCG(20261124, 0))
+	alphabets := []string{"ab", "abcdefghijklmnopqrstuvwxyz0123456789 .:/-", "a\x80\xff\x01\x7f"}
+	for iter := range 20000 {
+		maxLen := 80
+		if iter%50 == 0 {
+			maxLen = 700
+		}
+		a, b := randomPair(rng, 0, maxLen, alphabets[iter%3])
+		if bound, full := histogramBoundOf(string(a), string(b)), referenceLevenshtein(a, b); bound > full {
+			t.Fatalf("bound %d > distance %d for a=%q b=%q", bound, full, a, b)
+		}
+	}
+}
+
+// histogramExceeds is the matcher's fast form (one saturating subtract per
+// word, early exit): it must answer exactly bound > k.
+func TestHistogramExceedsIsBoundGreaterThanK(t *testing.T) {
+	rng := rand.New(rand.NewPCG(20261125, 0))
+	alphabets := []string{"ab", "abcdefghijklmnopqrstuvwxyz0123456789 .:/-", "a\x80\xff\x01\x7f"}
+	for iter := range 20000 {
+		maxLen := 80
+		if iter%50 == 0 {
+			maxLen = 700
+		}
+		a, b := randomPair(rng, 0, maxLen, alphabets[iter%3])
+		var ha, hb byteHistogram
+		buildHistogram(a, &ha)
+		buildHistogram(b, &hb)
+		bound := histogramBound(&ha, &hb)
+		for _, k := range []uint32{0, 1, 3, bound - 1, bound, bound + 1, 5000} {
+			if got := histogramExceeds(&ha, &hb, k); got != (bound > k) {
+				t.Fatalf("histogramExceeds(k=%d) = %v, bound %d, a=%q b=%q", k, got, bound, a, b)
+			}
+		}
 	}
 }
