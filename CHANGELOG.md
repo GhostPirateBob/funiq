@@ -11,6 +11,10 @@ Release notes for funiq, newest first. Versions follow [Semantic Versioning](htt
   kernel calls for `-d 3` and 94% for the `-d` preset. Windows, 1 thread: preset 3.0 s -> 0.9 s,
   `-d 3` 4.7 s -> 1.8 s, `--best -d 3` (all cores) 0.88 s -> 0.43 s, token-sort -32%;
   arm64 alike. Memo-heavy logs and large output are unchanged.
+- The Rust and Go ports use the same bound: Rust as a plain loop LLVM vectorises (preset -58%,
+  `-d 3` -44%); Go, which has no SIMD intrinsics, as 16 packed words compared eight bytes at a
+  time (SWAR) with one saturating subtract per word and an early exit (preset -53%, `-d 3` -45%;
+  a plain Go loop made it slower than no filter).
 - GCC builds align functions and loops (`-falign-functions=64 -falign-loops=32
   -falign-jumps=32`), so unrelated changes can't shift the hot per-line loop to a slower address
   (it had cost the log case 7%).

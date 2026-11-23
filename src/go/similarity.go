@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"math"
 	"slices"
 )
@@ -314,4 +315,82 @@ func cosineDistance(a, b *profile) float64 {
 		return 0 // rounding can dip just below 0
 	}
 	return distance
+}
+
+// byteHistogram: a string's byte counts, bucketed by c & 127 and saturating
+// at 255, a cheap lower bound on the edit distance (see histogramBound), as
+// in the C++. Go has no SIMD intrinsics, so the 128 counts are packed into 16
+// words and compared eight at a time (SWAR); total is their sum.
+type byteHistogram struct {
+	words [16]uint64
+	total int64
+}
+
+func buildHistogram(s []byte, h *byteHistogram) {
+	var counts [128]uint8
+	for _, c := range s {
+		if n := &counts[c&127]; *n != 255 {
+			*n++
+		}
+	}
+	h.total = 0
+	for i := range h.words {
+		h.words[i] = binary.LittleEndian.Uint64(counts[i*8:])
+	}
+	for _, c := range counts {
+		h.total += int64(c)
+	}
+}
+
+const (
+	swarHigh  = 0x8080808080808080
+	swarEven  = 0x00FF00FF00FF00FF
+	swarLanes = 0x0001000100010001
+)
+
+// subSat: per-byte max(x - y, 0) of eight bytes at once.
+func subSat(x, y uint64) uint64 {
+	d := (x | swarHigh) - (y &^ swarHigh) // per byte, no borrow between bytes
+	diff := d ^ ((x ^ ^y) & swarHigh)     // per byte (x - y) mod 256
+	borrow := ((^x & y) | (^(x ^ y) & diff)) & swarHigh
+	return diff &^ ((borrow >> 7) * 0xFF) // zero where x < y
+}
+
+// surplus adds subSat's eight bytes into four 16-bit lanes (at most
+// 16 * 2 * 255 per lane over a histogram: no overflow).
+func surplus(acc, s uint64) uint64 { return acc + s&swarEven + (s>>8)&swarEven }
+
+func laneSum(acc uint64) int64 { return int64((acc * swarLanes) >> 48) }
+
+// histogramBound is max(P, N), P and N the surplus counts on either side:
+// each edit moves P and N by at most one, and folding or saturating counts
+// only lowers them. P - N is the difference of the totals.
+func histogramBound(a, b *byteHistogram) uint32 {
+	var acc uint64
+	for i := range a.words {
+		acc = surplus(acc, subSat(a.words[i], b.words[i]))
+	}
+	p := laneSum(acc)
+	return uint32(max(p, p-(a.total-b.total)))
+}
+
+// histogramExceeds reports histogramBound(a, b) > k, stopping as soon as the
+// partial surplus decides it: P only grows, and max(P, N) > k exactly when
+// P > k + min(0, a.total - b.total).
+func histogramExceeds(a, b *byteHistogram, k uint32) bool {
+	limit := int64(k) + min(0, a.total-b.total)
+	if limit < 0 {
+		return true
+	}
+	var acc uint64
+	for i := 0; i < 16; i += 4 {
+		acc = surplus(acc, subSat(a.words[i], b.words[i]))
+		acc = surplus(acc, subSat(a.words[i+1], b.words[i+1]))
+		acc = surplus(acc, subSat(a.words[i+2], b.words[i+2]))
+		acc = surplus(acc, subSat(a.words[i+3], b.words[i+3]))
+		if laneSum(acc) > limit {
+			return true
+		}
+	}
+	return false
 }

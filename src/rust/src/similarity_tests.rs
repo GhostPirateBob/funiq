@@ -178,3 +178,32 @@ fn trigrams_are_packed_exactly() {
     assert!(trigram_profile(b"").grams.is_empty());
     assert_eq!(trigram_profile(b"aaaa").norm, 2.0);
 }
+
+fn histogram_bound_of(a: &[u8], b: &[u8]) -> u32 {
+    histogram_bound(&build_histogram(a), &build_histogram(b))
+}
+
+#[test]
+fn histogram_bound_is_the_larger_surplus() {
+    assert_eq!(histogram_bound_of(b"", b""), 0);
+    assert_eq!(histogram_bound_of(b"abc", b"abd"), 1); // one substitution
+    assert_eq!(histogram_bound_of(b"aaaa", b""), 4); // four deletions
+    assert_eq!(histogram_bound_of(b"abc", b"cba"), 0); // an anagram: counts can't tell
+    assert_eq!(histogram_bound_of(b"aab", b"abbbb"), 3); // surplus a:1, b:3
+    assert_eq!(histogram_bound_of(b"\x80", b"\x00"), 0); // bytes fold to c & 127
+    assert_eq!(histogram_bound_of(&[b'a'; 300], b""), 255); // counts saturate
+}
+
+/// The prefilter skips a pair when this bound exceeds the budget, so it must
+/// never exceed the edit distance or a real match would be lost.
+#[test]
+fn histogram_bound_never_exceeds_the_edit_distance() {
+    let mut rng = Rng(20261124);
+    let alphabets: [&[u8]; 3] = [b"ab", b"abcdefghijklmnopqrstuvwxyz0123456789 .:/-", b"a\x80\xff\x01\x7f"];
+    for iter in 0..20000 {
+        let max_len = if iter % 50 == 0 { 700 } else { 80 };
+        let (a, b) = random_pair(&mut rng, 0, max_len, alphabets[iter % 3]);
+        assert!(histogram_bound_of(&a, &b) <= reference_levenshtein(&a, &b), "a={a:?} b={b:?}");
+    }
+}
+
