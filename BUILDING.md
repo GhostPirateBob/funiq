@@ -1,6 +1,6 @@
 # Building funiq
 
-funiq is one C++11 source file (`src/funiq.cpp`) plus headers in `lib/funiq/`. The only dependencies are vendored headers: TCLAP for argument parsing (`lib/tclap/`) and Catch2 v2 for unit tests (`lib/catch/`). You need a C++11 compiler, GNU make and, for the CLI tests, bash.
+funiq is one C++11 source file (`src/cpp/funiq.cpp`) plus headers in `src/cpp/funiq/`; Rust and Go ports for benchmarking live in `src/rust/` and `src/go/`. The only dependencies are vendored headers: TCLAP for argument parsing (`lib/tclap/`) and Catch2 v2 for unit tests (`lib/catch/`). You need a C++11 compiler, GNU make and, for the CLI tests, bash.
 
 ```
 make            # build bin/funiq and run every test
@@ -40,15 +40,18 @@ Any GNU make works: Linux make, scoop/avr-gcc make, `mingw32-make`, Cygwin make.
 
 | target | does |
 |---|---|
-| `make` / `make all` | build `bin/funiq` and the tests, run both test suites |
-| `make build` | build `bin/funiq` only |
-| `make test` | build and run the unit tests, then the CLI tests against `bin/funiq` |
-| `make toolchain` | show compiler, target, flags |
-| `make install` | install the binary (see below) |
-| `make uninstall` | remove it again |
+| `make` / `make all` | build and test every language in `LANGS` |
+| `make build` / `make test` | build / test every language in `LANGS` |
+| `make build-cpp` / `make test-cpp` | `bin/funiq`; its unit tests and the CLI tests |
+| `make build-rust` / `make test-rust`, `make build-go` / `make test-go` | the ports (`bin/funiq-rs`, `bin/funiq-go`) and their tests |
+| `make build-cpp-msvc` / `make test-cpp-msvc` | Windows only: the same C++ built with Visual Studio's MSVC (`/O2`, static CRT) as `bin/funiq-msvc.exe`, via `tools/build-msvc.bat` |
+| `make toolchain` | show compiler, target, flags, `LANGS`, cargo and go versions |
+| `make install` | install every built binary (see below); `make install-cpp` etc. for one |
+| `make uninstall` | remove them again |
+| `make bench` | benchmark the built binaries against each other |
 | `make clean` | delete the built binaries |
 
-Targets depend on `src/funiq.cpp` and `lib/funiq/*.h`, so `make` rebuilds exactly when a source changed.
+`LANGS` is `cpp`, plus `rust` and `go` when their sources exist and `cargo` / `go` run, so a machine with only a C++ compiler still builds funiq. The C++ targets depend on `src/cpp/funiq.cpp` and `src/cpp/funiq/*.h`, so `make` rebuilds exactly when a source changed. The release build is MinGW: on 24k lines MSVC was 12% faster at `-d 3` single-threaded, but 19% slower on all cores and 31% slower writing large output.
 
 ## Installing
 
@@ -63,7 +66,7 @@ Overrides: `make install PREFIX=/opt/funiq` (binary goes to `PREFIX/bin`), `make
 
 `make test` runs two suites; both must pass.
 
-### Unit tests: `test/test.cpp`
+### Unit tests: `src/cpp/test/test.cpp`
 
 Catch2, built as `bin/funiq_test`. They cover:
 
@@ -106,7 +109,7 @@ Use literal paths in such one-liners: a variable that ends up empty turns `cd $D
 
 `.github/workflows/publish.yml` runs when a `v*` tag is pushed:
 
-1. Bump the version in `src/funiq.cpp` (the `TCLAP::CmdLine` line) and add a `## [X.Y.Z]` section to CHANGELOG.md, then merge to `master`.
+1. Bump the version in `src/cpp/funiq.cpp` (the `TCLAP::CmdLine` line) and add a `## [X.Y.Z]` section to CHANGELOG.md, then merge to `master`.
 2. `git tag -s vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`
 3. Each platform builds, reruns the full test suites against the release binary, checks the tag matches `funiq --version`, checks the binary is standalone, and packages it:
 

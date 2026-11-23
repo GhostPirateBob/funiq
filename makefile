@@ -1,8 +1,12 @@
-# Portable across Linux (x86_64, arm64), MinGW and Cygwin. Override the
-# compiler with `make CXX=...` or the CXX environment variable.
+# funiq: the C++ tool (the release) plus Rust and Go ports for benchmarking.
+# Portable across Linux (x86_64, arm64), macOS, MinGW and Cygwin; needs GNU
+# make and a POSIX sh. Override the compiler with `make CXX=...` or the CXX
+# environment variable, cargo and go with CARGO=... and GO=....
 CXX ?= g++
 CXXFLAGS=-Wall -g -std=c++11 -pthread
 OPT_FLAG=-O2
+CARGO ?= cargo
+GO ?= go
 
 ifeq ($(OS),Windows_NT)
   EXE=.exe
@@ -26,9 +30,29 @@ endif
 ifneq (,$(findstring mingw,$(shell $(CXX) -dumpmachine)))
   LDFLAGS+=-static
 endif
+
+CPP_INCLUDES=-Isrc/cpp -Ilib
 OUT=bin/funiq$(EXE)
 OUT_TEST=bin/funiq_test$(EXE)
-HEADERS=$(wildcard lib/funiq/*.h)
+OUT_MSVC=bin/funiq-msvc$(EXE)
+OUT_RUST=bin/funiq-rs$(EXE)
+OUT_GO=bin/funiq-go$(EXE)
+HEADERS=$(wildcard src/cpp/funiq/*.h)
+
+# The languages `make` builds and tests: C++ always, Rust and Go when their
+# sources exist and their toolchain answers, so a machine with only a C++
+# compiler still builds funiq.
+LANGS := cpp
+ifneq ($(wildcard src/rust/Cargo.toml),)
+  ifneq ($(shell $(CARGO) --version 2>/dev/null),)
+    LANGS += rust
+  endif
+endif
+ifneq ($(wildcard src/go/go.mod),)
+  ifneq ($(shell $(GO) version 2>/dev/null),)
+    LANGS += go
+  endif
+endif
 
 # Use DESTDIR and PREFIX for flexible install paths, or set BINDIR directly
 # (e.g. make install BINDIR=C:/PROGRAMS/__PATH).
@@ -54,48 +78,79 @@ BINDIR ?= $(DESTDIR)$(PREFIX)/bin
 
 all: build test
 
-# Show which compiler and target this make will use
-toolchain:
-	@echo "CXX=$(CXX)  target=$(shell $(CXX) -dumpmachine)  LDFLAGS=$(LDFLAGS)  EXE=$(EXE)"
+build: $(addprefix build-,$(LANGS))
 
-# Ensure bin directory exists before building
-$(OUT) $(OUT_TEST): | bin
+# Build first, then test, so a test failure doesn't prevent the binaries.
+test: build $(addprefix test-,$(LANGS))
+
+# Show which compilers, targets and languages this make will use
+toolchain:
+	@echo "CXX=$(CXX)  target=$(shell $(CXX) -dumpmachine)  LDFLAGS=$(LDFLAGS)  EXE=$(EXE)  LANGS=$(LANGS)"
+	@$(CARGO) --version 2>/dev/null && rustc --version 2>/dev/null || echo "cargo: not found"
+	@$(GO) version 2>/dev/null || echo "go: not found"
 
 bin:
 	mkdir -p bin
 
-build_test: $(OUT_TEST)
+# --- C++ ---------------------------------------------------------------------
+build-cpp: $(OUT)
 
-$(OUT_TEST): test/test.cpp $(HEADERS)
-	$(CXX) $(CXXFLAGS) -Ilib test/test.cpp -o $(OUT_TEST) $(LDFLAGS)
+$(OUT): src/cpp/funiq.cpp $(HEADERS) | bin
+	$(CXX) $(CXXFLAGS) $(OPT_FLAG) $(CPP_INCLUDES) src/cpp/funiq.cpp -o $(OUT) $(LDFLAGS)
 
-# Build the binary first, then run tests independently so a test failure
-# does not prevent the binary from being produced.
-test: build_test build
+$(OUT_TEST): src/cpp/test/test.cpp $(HEADERS) | bin
+	$(CXX) $(CXXFLAGS) $(CPP_INCLUDES) src/cpp/test/test.cpp -o $(OUT_TEST) $(LDFLAGS)
+
+test-cpp: $(OUT) $(OUT_TEST)
 	$(OUT_TEST)
 	bash test/cli_test.sh $(OUT)
 
-build: $(OUT)
+# Windows only: the same C++ built with Visual Studio's MSVC (/O2, static CRT)
+# as bin/funiq-msvc.exe, for comparing toolchains. The release stays MinGW.
+build-cpp-msvc: | bin
+	MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' cmd.exe /c "tools\\build-msvc.bat"
 
-$(OUT): src/funiq.cpp $(HEADERS)
-	$(CXX) $(CXXFLAGS) $(OPT_FLAG) -Ilib src/funiq.cpp -o $(OUT) $(LDFLAGS)
+test-cpp-msvc: build-cpp-msvc
+	bash test/cli_test.sh $(OUT_MSVC)
 
-# Install the compiled binary to the system path.
+# --- Rust and Go ports (see docs/superpowers/plans) --------------------------
+build-rust test-rust build-go test-go:
+	@echo "$@: not ported yet" && exit 1
+
+# --- install -----------------------------------------------------------------
+# Install every binary that `make build` produces (or one with install-<lang>).
 # Hint the user to use sudo if the install fails due to permissions.
-install: build
-	@install -d $(BINDIR) 2>/dev/null || \
-		(echo "Error: Permission denied writing to $(BINDIR). Try: sudo make install" && exit 1)
-	@install -m 755 $(OUT) $(BINDIR)/funiq$(EXE) 2>/dev/null || \
-		(echo "Error: Permission denied writing to $(BINDIR). Try: sudo make install" && exit 1)
-	@echo "Installed funiq to $(BINDIR)/funiq$(EXE)"
+install: $(addprefix install-,$(LANGS))
 
-# Remove the installed binary
+install-cpp: build-cpp
+	@$(call install_one,$(OUT),funiq)
+install-rust: build-rust
+	@$(call install_one,$(OUT_RUST),funiq-rs)
+install-go: build-go
+	@$(call install_one,$(OUT_GO),funiq-go)
+
+define install_one
+install -d $(BINDIR) 2>/dev/null || \
+	(echo "Error: Permission denied writing to $(BINDIR). Try: sudo make install" && exit 1); \
+install -m 755 $(1) $(BINDIR)/$(2)$(EXE) 2>/dev/null || \
+	(echo "Error: Permission denied writing to $(BINDIR). Try: sudo make install" && exit 1); \
+echo "Installed $(2) to $(BINDIR)/$(2)$(EXE)"
+endef
+
+# Remove every installed funiq binary
 uninstall:
-	@rm -f $(BINDIR)/funiq$(EXE) 2>/dev/null || \
+	@rm -f $(BINDIR)/funiq$(EXE) $(BINDIR)/funiq-rs$(EXE) $(BINDIR)/funiq-go$(EXE) 2>/dev/null || \
 		(echo "Error: Permission denied. Try: sudo make uninstall" && exit 1)
-	@echo "Removed $(BINDIR)/funiq$(EXE)"
+	@echo "Removed funiq, funiq-rs and funiq-go from $(BINDIR)"
+
+# --- benchmark ---------------------------------------------------------------
+bench: build
+	bash bench/bench.sh $(wildcard $(OUT) $(OUT_MSVC) $(OUT_RUST) $(OUT_GO))
 
 clean:
-	rm -f $(OUT) $(OUT_TEST)
+	rm -f $(OUT) $(OUT_TEST) $(OUT_MSVC) $(OUT_RUST) $(OUT_GO)
+	rm -rf bin/msvc-obj
+	@if [ -f src/rust/Cargo.toml ] && $(CARGO) --version >/dev/null 2>&1; then $(CARGO) clean --manifest-path src/rust/Cargo.toml; fi
 
-.PHONY: all toolchain build_test test build clean install uninstall
+.PHONY: all build test toolchain build-cpp test-cpp build-cpp-msvc test-cpp-msvc build-rust test-rust \
+	build-go test-go install install-cpp install-rust install-go uninstall bench clean

@@ -1,4 +1,5 @@
 *.out
 __pycache__/
 *.pyc
-test.py
+test.pysrc/rust/target/
+bench/data/

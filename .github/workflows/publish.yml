@@ -1,7 +1,7 @@
 # Builds release binaries for every platform and attaches them to a DRAFT GitHub
 # release, so a release is complete (all assets, notes, provenance) before
 # anyone can see it:
-#   1. bump the version in src/funiq.cpp and CHANGELOG.md, merge to master
+#   1. bump the version in src/cpp/funiq.cpp and CHANGELOG.md, merge to master
 #   2. git tag -s vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z
 #      Each platform builds, runs the full test suites against the release
 #      binary, and uploads an archive. The release job then attests build
@@ -65,7 +65,7 @@ jobs:
           [ -n "$LDF" ] && args+=("LDFLAGS=$LDF")
           [ -n "$CXXV" ] && args+=("CXX=$CXXV")
           $MAKE "${args[@]}" toolchain
-          $MAKE "${args[@]}" all
+          $MAKE "${args[@]}" build-cpp test-cpp
 
       - name: Check the tag matches funiq --version
         run: |

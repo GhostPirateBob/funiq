@@ -24,9 +24,9 @@ jobs:
         run: |
           status=0
           for cxx in g++ clang++; do
-            out=$({ "$cxx" -std=c++11 -Wall -Wextra -Wpedantic -pthread -Ilib -fsyntax-only src/funiq.cpp 2>&1
-                    "$cxx" -std=c++11 -Wall -Wextra -pthread -Ilib -fsyntax-only test/test.cpp 2>&1; } \
-                  | grep -E '^(src|lib/funiq|test)/[^:]*:[0-9]+:[0-9]+: (warning|error)' || true)
+            out=$({ "$cxx" -std=c++11 -Wall -Wextra -Wpedantic -pthread -Isrc/cpp -Ilib -fsyntax-only src/cpp/funiq.cpp 2>&1
+                    "$cxx" -std=c++11 -Wall -Wextra -pthread -Isrc/cpp -Ilib -fsyntax-only src/cpp/test/test.cpp 2>&1; } \
+                  | grep -E '^src/cpp/[^:]*:[0-9]+:[0-9]+: (warning|error)' || true)
             if [ -n "$out" ]; then echo "::error::$cxx warnings in first-party code"; echo "$out"; status=1; fi
           done
           exit $status
