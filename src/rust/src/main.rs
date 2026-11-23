@@ -3,6 +3,7 @@
 
 mod cli;
 mod settings;
+mod similarity;
 
 use std::process::ExitCode;
 
