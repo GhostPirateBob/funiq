@@ -2,7 +2,7 @@
 
 Release notes for funiq, newest first. Versions follow [Semantic Versioning](https://semver.org/): a major bump means some output changed.
 
-## [Unreleased]
+## [1.3.0] - 2026-11-24
 
 ### Added
 - Rust and Go ports (`src/rust`, `src/go`) for comparing languages: the same algorithm with

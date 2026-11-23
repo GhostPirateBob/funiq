@@ -16,7 +16,7 @@ import (
 	"syscall"
 )
 
-const version = "1.2.0"
+const version = "1.3.0"
 
 // batchSize: lines per batch, as in the C++; each batch's scan runs on all
 // threads.
