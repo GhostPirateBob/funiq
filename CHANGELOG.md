@@ -17,6 +17,12 @@ Release notes for funiq, newest first. Versions follow [Semantic Versioning](htt
 - Windows: `2>NUL` no longer pre-reads the whole input file for an invisible progress bar
 
 ### Performance
+- Levenshtein comparisons use Hyyrö's bit-parallel algorithm: a 64-bit word holds the whole
+  band of 2k + 1 diagonals (k up to 31), or a whole DP column for a side of at most 64 bytes,
+  so a step costs a dozen word operations however large k is. On 24k log lines: `--default`
+  9.6s -> 2.3s single-threaded (1.8s -> 0.38s on 12 threads), `-d 3` 4.4s -> 2.6s,
+  `-m token-sort` 3.8x, `-d 8` 4.0x. Wider budgets (e.g. `-m normalized-levenshtein -d 0.3` on
+  long lines) still use the banded DP.
 - Worker threads are started once and reused for every batch. Starting them per 256-line batch
   made log runs slower on all cores than on one: `-d -D` on 240k log lines, 12 threads,
   1.65s -> 0.36s (`-j 1`: 0.60s)

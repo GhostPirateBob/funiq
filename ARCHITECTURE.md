@@ -48,10 +48,11 @@ So grouping is greedy and order-dependent, like a single pass of leader clusteri
 
 1. **length bound:** at least `|len(a) − len(b)|` edits are needed;
 2. **affix strip:** a common prefix and suffix never change the distance;
-3. **Ukkonen band:** only cells with `|i − j| ≤ k` can stay within `k`;
-4. **early abort:** once a whole row exceeds `k`, it can only grow.
+3. **bit-parallel band** (Hyyrö 2003, for `1 ≤ k ≤ 31`): only the `2k + 1` diagonals around the main one can stay within `k`, and they fit one 64-bit word. Each step updates the whole band with a dozen word operations, using a per-byte bit window that slides along the longer string, so no pattern table is built. It gives up once the diagonal value, which never decreases, passes `2k − (len(a) − len(b))`. For far-apart strings that happens within about `k` steps;
+4. **bit-parallel column** (Hyyrö 2003): when the band is too wide but the shorter side is at most 64 bytes, a word holds a whole DP column;
+5. **banded DP** otherwise (`k = 0`, or wide bands on long lines): the Ukkonen band with early abort once a whole row exceeds `k`.
 
-The two DP rows live in a caller-provided scratch buffer, one per thread, so the hot loop never allocates. `Matcher::distanceTo` turns the threshold into a budget `k`. For the normalized methods it adds one edit of slack, and the original float comparison `dist / maxLen <= d` still decides. Results are therefore identical to computing the full distance. A cheaper length-only check (`lengthRulesOut`) runs first over a contiguous array of key lengths. The exact `levenshteinDistance` is simply the bounded version with a budget no pair can exceed.
+The band kernel beats the DP from `k = 1` (measured: `-d 3` 1.7× faster), and trying the column kernel first is 1.4× slower than the band on log lines. rapidfuzz-cpp switches at `k = 4` only because below that it uses mbleven. The DP rows and the kernels' per-byte tables live in a caller-provided `similarity::Scratch`, one per thread, so the hot loop never allocates. Each kernel resets only the table entries it touched, so no call clears all 256. `Matcher::distanceTo` turns the threshold into a budget `k`. For the normalized methods it adds one edit of slack, and the original float comparison `dist / maxLen <= d` still decides. Results are therefore identical to computing the full distance. A cheaper length-only check (`lengthRulesOut`) runs first over a contiguous array of key lengths. The exact `levenshteinDistance` is simply the bounded version with a budget no pair can exceed.
 
 **Cosine.** `trigramProfile` packs every 3-byte window exactly into 24 bits, so there is no hashing and there are no collisions. Strings shorter than 3 characters become one tagged gram. The profile is a sorted vector of (gram, count) pairs plus its norm, built once per key, so each comparison is a linear merge. There is no length bound for cosine.
 
@@ -99,6 +100,7 @@ Measured on synthetic nginx lines, with identical output at every step:
 | threads started once, not per batch (240k log lines, `-d -D`, 12 threads) | 1.65s → 0.36s |
 | members kept only for `-a`/`--scores` (27 MB log, `-d -D -c`) | 46.5 MB → 5.5 MB peak |
 | 1 MiB input/output buffers | 11–19% |
+| bit-parallel Levenshtein (24k lines, single-threaded) | `--default` 4.2×, `-d 3` 1.7× |
 
 Pipes on Windows: an MSYS/Cygwin program (Git Bash's `cat`, `zcat`) writing into a native one runs at about 8 MB/s, whatever the reader does (`rg` is just as slow). From a native writer, or a file, funiq reads at full speed.
 

@@ -72,23 +72,23 @@ private:
 	// keyLengths[i] == groups[i].normalizedKey.size(), stored contiguously
 	// so the length pre-check scans one compact array instead of the groups.
 	std::vector<unsigned int> keyLengths;
-	// DP rows for the serial path.
-	std::vector<unsigned int> scratch;
-	// addBatch's threads, started on first use and kept, with one DP buffer
-	// per thread.
+	// Distance working memory for the serial path.
+	similarity::Scratch scratch;
+	// addBatch's threads, started on first use and kept, each with its own
+	// distance working memory.
 	std::unique_ptr<WorkerPool> pool;
-	std::vector<std::vector<unsigned int>> poolRows;
+	std::vector<similarity::Scratch> poolScratch;
 	bool keepMembers() const { return opts.showAllMatches || opts.showScores; }
 
 	std::string normalize(const std::string& s) const;
 	Candidate prepare(const std::string& line) const;
 	bool lengthRulesOut(unsigned int len, unsigned int keyLen) const;
-	bool distanceTo(const Candidate& c, size_t i, std::vector<unsigned int>& rows, double& score) const;
+	bool distanceTo(const Candidate& c, size_t i, similarity::Scratch& scratch, double& score) const;
 	// A negative (or NaN) threshold matches nothing, not even an identical
 	// line, so repeats must not be memoised into one group there.
 	bool memoEnabled() const { return opts.maxDistance >= 0 && !opts.bestMatch; }
 	Hit lookupMemo(const std::string& normalizedLine) const;
-	Hit findMatch(const Candidate& c, size_t from, size_t to, std::vector<unsigned int>& rows) const;
+	Hit findMatch(const Candidate& c, size_t from, size_t to, similarity::Scratch& scratch) const;
 	void place(const std::string& line, Candidate& c, Hit hit);
 	std::string formatScore(double score) const;
 };
@@ -158,16 +158,16 @@ inline Hit Matcher::lookupMemo(const std::string& normalizedLine) const {
 }
 
 // Without --best: the first group in [from, to) within the threshold. With
-// --best: the closest one, lowest index on ties. Read-only apart from `rows`,
+// --best: the closest one, lowest index on ties. Read-only apart from `scratch`,
 // so threads can call it at once as long as each passes its own buffer.
 inline Hit Matcher::findMatch(const Candidate& c, size_t from, size_t to,
-                       std::vector<unsigned int>& rows) const {
+                       similarity::Scratch& scratch) const {
 	const unsigned int len = c.normalized.size();
 	Hit best;
 	for(size_t i = from; i < to; i++) {
 		if(lengthRulesOut(len, keyLengths[i])) continue;
 		double score;
-		if(!distanceTo(c, i, rows, score)) continue;
+		if(!distanceTo(c, i, scratch, score)) continue;
 		if(!opts.bestMatch) return Hit(i, score);
 		if(best.group == NO_GROUP || score < best.score) best = Hit(i, score);
 		if(score == 0) break; // nothing can beat an exact match
@@ -229,15 +229,15 @@ inline void Matcher::addBatch(const std::vector<std::string>& lines, unsigned th
 	const unsigned workers = std::max(1u, threads);
 	if(!pool || pool->size() != workers) {
 		pool.reset(new WorkerPool(workers));
-		poolRows.assign(workers, std::vector<unsigned int>());
+		poolScratch.assign(workers, similarity::Scratch());
 	}
 	std::atomic<size_t> next(0);
 	pool->run([&](unsigned w) {
-		std::vector<unsigned int>& rows = poolRows[w]; // this thread's DP buffer
+		similarity::Scratch& own = poolScratch[w]; // this thread's working memory
 		for(size_t i; (i = next++) < lines.size(); ) {
 			candidates[i] = prepare(lines[i]);
 			Hit memo = lookupMemo(candidates[i].normalized);
-			hit[i] = (memo.group != NO_GROUP) ? memo : findMatch(candidates[i], 0, frozen, rows);
+			hit[i] = (memo.group != NO_GROUP) ? memo : findMatch(candidates[i], 0, frozen, own);
 		}
 	});
 
@@ -318,7 +318,7 @@ inline void Matcher::show(std::ostream* output) const {
 // the distance only up to k, so far-away keys are rejected without the full
 // O(n*m) DP; the final comparisons are the same expressions as an unbounded
 // computation, so results are identical.
-inline bool Matcher::distanceTo(const Candidate& c, size_t i, std::vector<unsigned int>& rows,
+inline bool Matcher::distanceTo(const Candidate& c, size_t i, similarity::Scratch& scratch,
                          double& score) const {
 	const float d = opts.maxDistance;
 	if(!(d >= 0)) return false; // negative or NaN: no distance qualifies
@@ -337,14 +337,14 @@ inline bool Matcher::distanceTo(const Candidate& c, size_t i, std::vector<unsign
 		// the exact float test below still has the final say.
 		double budget = (double)d * maxLen;
 		unsigned int k = budget >= maxLen ? maxLen : (unsigned int)budget + 1;
-		unsigned int dist = similarity::boundedLevenshtein(s1, s2, k, rows);
+		unsigned int dist = similarity::boundedLevenshtein(s1, s2, k, scratch);
 		float ratio = (float)dist / (float)maxLen;
 		score = ratio;
 		return ratio <= d;
 	}
 
 	unsigned int k = d >= maxLen ? maxLen : (unsigned int)d;
-	unsigned int dist = similarity::boundedLevenshtein(s1, s2, k, rows);
+	unsigned int dist = similarity::boundedLevenshtein(s1, s2, k, scratch);
 	score = dist;
 	return dist <= d;
 }

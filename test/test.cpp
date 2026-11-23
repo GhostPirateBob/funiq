@@ -104,6 +104,79 @@ TEST_CASE( "levenshteinDistance and boundedLevenshtein agree with the reference 
 	}
 }
 
+// Random pairs where the second string is an edited copy of the first (so
+// many pairs are close, as funiq's matches are) or unrelated (far apart).
+static std::pair<std::string, std::string> randomPair(std::mt19937& rng, size_t minLen, size_t maxLen,
+                                                      const char* alphabet, size_t letters) {
+	auto randomString = [&](size_t len) {
+		std::string s(len, 'a');
+		for(auto& c : s) c = alphabet[rng() % letters];
+		return s;
+	};
+	std::string a = randomString(minLen + rng() % (maxLen - minLen + 1)), b;
+	if(rng() % 2) {
+		b = a;
+		for(int edits = rng() % 20; edits > 0; edits--) {
+			size_t at = b.empty() ? 0 : rng() % b.size();
+			switch(rng() % 3) {
+				case 0: if(!b.empty()) b[at] = alphabet[rng() % letters]; break;
+				case 1: b.insert(b.begin() + at, alphabet[rng() % letters]); break;
+				default: if(!b.empty()) b.erase(at, 1);
+			}
+		}
+	} else {
+		b = randomString(minLen + rng() % (maxLen - minLen + 1));
+	}
+	return std::make_pair(a, b);
+}
+
+TEST_CASE( "bit-parallel kernels agree with the reference table on their own domains", "[levenshtein]" ) {
+	std::mt19937 rng(424243);
+	similarity::Scratch scratch;
+	const unsigned char* (*bytes)(const std::string&) = [](const std::string& s) {
+		return reinterpret_cast<const unsigned char*>(s.data());
+	};
+	for(int iter = 0; iter < 20000; iter++) {
+		const char* alphabet = iter % 2 ? "abc" : "abcdefghijklmnopqrstuvwxyz0123456789";
+		auto p = randomPair(rng, 1, 64, alphabet, iter % 2 ? 3 : 36);
+		const std::string& text = p.first.size() >= p.second.size() ? p.first : p.second;
+		const std::string& pat = p.first.size() >= p.second.size() ? p.second : p.first;
+		if(pat.empty()) continue;
+		unsigned int k = rng() % 40;
+		unsigned int full = referenceLevenshtein(text, pat);
+		INFO("word: text=\"" << text << "\" pattern=\"" << pat << "\" k=" << k);
+		REQUIRE(similarity::levenshteinWord(bytes(text), text.size(), bytes(pat), pat.size(), k, scratch)
+		        == (full <= k ? full : k + 1));
+	}
+	for(int iter = 0; iter < 20000; iter++) {
+		const char* alphabet = iter % 2 ? "abc" : "abcdefghijklmnopqrstuvwxyz0123456789";
+		auto p = randomPair(rng, 1, 200, alphabet, iter % 2 ? 3 : 36);
+		const std::string& s1 = p.first.size() >= p.second.size() ? p.first : p.second;
+		const std::string& s2 = p.first.size() >= p.second.size() ? p.second : p.first;
+		unsigned int k = rng() % 32; // 2k + 1 <= 64
+		if(k > s2.size() || s1.size() - s2.size() > k) continue; // outside the band kernel's domain
+		unsigned int full = referenceLevenshtein(s1, s2);
+		INFO("band: s1=\"" << s1 << "\" s2=\"" << s2 << "\" k=" << k);
+		REQUIRE(similarity::levenshteinBand(bytes(s1), s1.size(), bytes(s2), s2.size(), k, scratch)
+		        == (full <= k ? full : k + 1));
+	}
+}
+
+TEST_CASE( "boundedLevenshtein agrees with the reference on long strings and wide budgets", "[levenshtein]" ) {
+	// Covers every path of the dispatch: banded DP (small and wide k),
+	// single-word bit-parallel (short side <= 64) and the 64-bit band.
+	std::mt19937 rng(20261123);
+	similarity::Scratch scratch; // reused, as the matcher does: kernels must leave it clean
+	for(int iter = 0; iter < 6000; iter++) {
+		const char* alphabet = iter % 2 ? "ab" : "abcdefghijklmnopqrstuvwxyz";
+		auto p = randomPair(rng, 0, 200, alphabet, iter % 2 ? 2 : 26);
+		unsigned int k = rng() % 46;
+		unsigned int full = referenceLevenshtein(p.first, p.second);
+		INFO("a=\"" << p.first << "\" b=\"" << p.second << "\" k=" << k);
+		REQUIRE(similarity::boundedLevenshtein(p.first, p.second, k, scratch) == (full <= k ? full : k + 1));
+	}
+}
+
 TEST_CASE( "a repeated line joins the same group as its first occurrence", "[matcher]" ) {
 	Settings settings;
 	settings.maxDistance = 1;
