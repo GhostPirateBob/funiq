@@ -133,6 +133,8 @@ build-go: | bin
 
 test-go: build-go
 	cd src/go && $(GO) vet ./... && $(GO) test ./...
+	bash test/conformance.sh $(OUT) $(OUT_GO) > bin/conformance-go.log || (grep -A1 "^FAIL" bin/conformance-go.log; tail -1 bin/conformance-go.log; exit 1)
+	@tail -1 bin/conformance-go.log
 
 # --- install -----------------------------------------------------------------
 # Install every binary that `make build` produces (or one with install-<lang>).
