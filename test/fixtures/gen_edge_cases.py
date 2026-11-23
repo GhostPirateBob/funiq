@@ -1,13 +1,15 @@
 """Edge-case inputs for test/conformance.sh, written at run time.
 
 Usage: python test/fixtures/gen_edge_cases.py OUTDIR
-Writes OUTDIR/edge.txt (short, awkward lines) and OUTDIR/long.txt (lines of
-70 KB and 3 MB). Generated rather than committed, so git line-ending
+Writes OUTDIR/edge.txt (short, awkward lines), OUTDIR/long.txt (lines of
+70 KB and 3 MB) and OUTDIR/random.txt (2,500 seeded random lines with
+near-duplicates: ten 256-line batches for the threaded two-phase matcher). Generated rather than committed, so git line-ending
 conversion can never touch the CRLF and 0x1A bytes they contain.
 """
 
 from __future__ import annotations
 
+import random
 import sys
 from pathlib import Path
 
@@ -40,6 +42,32 @@ def edge_lines() -> list[bytes]:
     return lines
 
 
+def random_lines() -> list[bytes]:
+    """Seeded random lines: odd bytes (CR, VT, FF, tab, NUL, 0x80, 0xE9, 0xFF), digits and
+    case, lengths around the 31/32/33 and 63/64/65 kernel limits and up to 200,
+    and edited copies of earlier lines so there are real groups to join."""
+    rng = random.Random(20261124)
+    alphabet = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJ0123456789 .,:=/-_\t\r\x0b\x0c\x00\x80\xe9\xff"
+    lines: list[bytes] = []
+    for _ in range(2500):
+        if lines and rng.random() < 0.5:
+            line = bytearray(rng.choice(lines))
+            for _ in range(rng.randint(1, 4)):
+                at = rng.randrange(len(line) + 1)
+                op = rng.randrange(3)
+                if op == 0 and line:
+                    line[min(at, len(line) - 1)] = rng.choice(alphabet)
+                elif op == 1:
+                    line.insert(at, rng.choice(alphabet))
+                elif line:
+                    del line[min(at, len(line) - 1)]
+            lines.append(bytes(line))
+        else:
+            n = rng.choice([0, 1, 2, 5, 31, 32, 33, 63, 64, 65, rng.randint(0, 200)])
+            lines.append(bytes(rng.choice(alphabet) for _ in range(n)))
+    return lines
+
+
 def main() -> None:
     out = Path(sys.argv[1])
     out.mkdir(parents=True, exist_ok=True)
@@ -47,6 +75,7 @@ def main() -> None:
     (out / "edge.txt").write_bytes(b"\n".join(edge_lines() + [b"no newline at the end"]))
     long_line = bytes(b"0123456789abcdef"[i % 16] for i in range(70_000))
     huge_line = b"x" * 3_000_000
+    (out / "random.txt").write_bytes(b"\n".join(random_lines()) + b"\n")
     (out / "long.txt").write_bytes(b"\n".join([long_line, one_edit(long_line, 35_000), huge_line, b"abc", b"abd"]))
 
 
