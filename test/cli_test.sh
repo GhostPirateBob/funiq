@@ -128,6 +128,27 @@ if [ "$got" = "$want" ]; then ok "$name"; else ko "$name" "regenerate the README
 
 [ "$(printf 'x\n' | "$FUNIQ" --rep sideways >/dev/null 2>&1; echo $?)" != 0 ] && ok "--rep sideways exits non-zero" || ko "--rep sideways exits non-zero"
 
+# An unknown option is an argument error, not a filename (TCLAP gives any
+# unmatched argument to the filename). After "--" a leading dash is a name.
+for bad in "-x" "--nope" "--=x"; do
+	name="unknown option $bad is reported as an argument error"
+	err=$(printf 'x\n' | "$FUNIQ" -c "$bad" 2>&1 >/dev/null); rc=$?
+	if [ $rc -ne 0 ] && printf '%s' "$err" | grep -q "Couldn't find match" \
+		&& ! printf '%s' "$err" | grep -q 'No such file'; then ok "$name"; else ko "$name" "rc=$rc stderr='$err'"; fi
+done
+FUNIQ_ABS="$(cd "$(dirname "$FUNIQ")" && pwd)/$(basename "$FUNIQ")"
+printf 'x\n' > "$TMP/-dash.txt"
+name="after -- a leading-dash name is a file"
+[ "$(cd "$TMP" && "$FUNIQ_ABS" -c -- -dash.txt 2>/dev/null)" = "      1 x" ] && ok "$name" || ko "$name"
+name="after -- a missing leading-dash file is a file error"
+err=$(cd "$TMP" && "$FUNIQ_ABS" -c -- -missing.txt 2>&1 >/dev/null); rc=$?
+if [ $rc -ne 0 ] && printf '%s' "$err" | grep -q 'No such file'; then ok "$name"; else ko "$name" "rc=$rc stderr='$err'"; fi
+
+name="-j with a negative count exits non-zero"
+[ "$(printf 'x\n' | "$FUNIQ" -j -1 >/dev/null 2>&1; echo $?)" != 0 ] && ok "$name" || ko "$name"
+name="-j 0 still means all cores"
+[ "$(printf 'x\nx\n' | "$FUNIQ" -j 0 -c)" = "      2 x" ] && ok "$name" || ko "$name"
+
 # --- non-seekable file argument with progress bar active --------------------
 # Progress (stderr is a tty) pre-counts lines then rewinds; a FIFO can't rewind.
 name="FIFO filename with tty stderr keeps all lines"
