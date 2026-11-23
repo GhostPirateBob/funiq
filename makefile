@@ -125,6 +125,8 @@ build-rust: | bin
 
 test-rust: build-rust
 	$(CARGO) test --release $(RUST_MANIFEST)
+	bash test/conformance.sh $(OUT) $(OUT_RUST) > bin/conformance-rust.log || (grep -A1 "^FAIL" bin/conformance-rust.log; tail -1 bin/conformance-rust.log; exit 1)
+	@tail -1 bin/conformance-rust.log
 
 build-go test-go:
 	@echo "$@: not ported yet" && exit 1

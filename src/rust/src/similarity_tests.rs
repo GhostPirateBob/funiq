@@ -38,7 +38,7 @@ impl Rng {
 
 /// An edited copy (close, as funiq's matches are) or an unrelated string.
 fn random_pair(rng: &mut Rng, min_len: usize, max_len: usize, alphabet: &[u8]) -> (Vec<u8>, Vec<u8>) {
-    let mut random_string = |rng: &mut Rng, len: usize| -> Vec<u8> {
+    let random_string = |rng: &mut Rng, len: usize| -> Vec<u8> {
         (0..len).map(|_| alphabet[rng.below(alphabet.len())]).collect()
     };
     let len = min_len + rng.below(max_len - min_len + 1);

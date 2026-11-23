@@ -240,6 +240,8 @@ impl Matcher {
     }
 
     /// A line joins only one group, so counts sum to the number of lines.
+    /// The serial path: the binary uses add_batch, the tests compare the two.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn add(&mut self, line: Vec<u8>) {
         let c = self.prepare(&line);
         let mut hit = self.lookup_memo(&c.normalized);
