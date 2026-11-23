@@ -2,6 +2,7 @@
 //! the C++ original. Same algorithm, byte-identical output.
 
 mod cli;
+mod matcher;
 mod settings;
 mod similarity;
 

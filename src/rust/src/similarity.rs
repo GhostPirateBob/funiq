@@ -20,6 +20,12 @@ pub struct Scratch {
     window: [(isize, u64); 256],
 }
 
+impl Default for Scratch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Scratch {
     pub fn new() -> Self {
         Scratch { rows: Vec::new(), peq: [0; 256], window: [(FAR_PAST, 0); 256] }
@@ -207,6 +213,7 @@ pub fn bounded_levenshtein(s1: &[u8], s2: &[u8], k: u32, s: &mut Scratch) -> u32
 }
 
 /// Character-trigram counts sorted by gram, plus their Euclidean norm.
+#[derive(Default)]
 pub struct Profile {
     pub grams: Vec<(u32, u32)>,
     pub norm: f64,
