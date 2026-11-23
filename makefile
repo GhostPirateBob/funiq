@@ -123,7 +123,7 @@ build-rust: | bin
 	$(CARGO) build --release $(RUST_MANIFEST)
 	cp src/rust/target/release/funiq-rs$(EXE) $(OUT_RUST)
 
-test-rust: build-rust
+test-rust: build-rust $(OUT)
 	$(CARGO) test --release $(RUST_MANIFEST)
 	bash test/conformance.sh $(OUT) $(OUT_RUST) > bin/conformance-rust.log || (grep -A1 "^FAIL" bin/conformance-rust.log; tail -1 bin/conformance-rust.log; exit 1)
 	@tail -1 bin/conformance-rust.log
@@ -131,7 +131,7 @@ test-rust: build-rust
 build-go: | bin
 	cd src/go && CGO_ENABLED=0 $(GO) build -trimpath -o ../../$(OUT_GO) .
 
-test-go: build-go
+test-go: build-go $(OUT)
 	cd src/go && $(GO) vet ./... && $(GO) test ./...
 	bash test/conformance.sh $(OUT) $(OUT_GO) > bin/conformance-go.log || (grep -A1 "^FAIL" bin/conformance-go.log; tail -1 bin/conformance-go.log; exit 1)
 	@tail -1 bin/conformance-go.log

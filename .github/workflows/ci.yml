@@ -57,8 +57,12 @@ jobs:
           elif command -v make >/dev/null 2>&1; then echo "MAKE=make" >> "$GITHUB_ENV"
           else choco install make --no-progress -y && echo "MAKE=make" >> "$GITHUB_ENV"; fi
 
+      # The ports are tested only when LANGS picks up cargo and go; fail if a
+      # runner image stops shipping either, instead of silently skipping it.
       - name: Toolchain
-        run: $MAKE toolchain
+        run: |
+          $MAKE toolchain | tee toolchain.txt
+          grep -q 'LANGS=cpp rust go$' toolchain.txt || { echo "::error::cargo or go missing: the Rust/Go ports would not be tested"; exit 1; }
 
       - name: Build and test (unit + CLI)
         run: $MAKE all
