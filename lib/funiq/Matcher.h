@@ -4,30 +4,35 @@
 #include <algorithm>
 #include <atomic>
 #include <string>
-#include <thread>
 #include <iostream>
 #include <iomanip>
 #include <functional>
 #include <cctype>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <unordered_map>
 #include <vector>
 
 #include "Color.h"
 #include "Settings.h"
+#include "WorkerPool.h"
 #include "similarity.h"
 
 
-// Each group stores its original key, cached normalized key (and trigram
-// profile for -m cosine), its members, and each member's distance from the
-// key (matches[0] is the key itself, distance 0).
+// A group: its key (the first line, which matching compares against), the
+// cached normalized key (and trigram profile for -m cosine), and its size.
+// Members themselves are kept only when they are printed (-a, --scores), so a
+// plain or -c run doesn't hold every input line in memory.
 struct MatchGroup {
 	std::string key;
 	std::string normalizedKey;
 	similarity::Profile profile;
-	std::vector<std::string> matches;
-	std::vector<double> scores;
+	size_t count = 0;                  // lines in the group, the key included
+	std::string longest;               // --rep longest: longest line so far (earliest on ties)
+	size_t longestAt = 0;              // its position in the group (0: the key)
+	std::vector<std::string> matches;  // -a/--scores: every line, matches[0] is the key
+	std::vector<double> scores;        // ... and its distance from the key
 };
 
 static const size_t NO_GROUP = (size_t)-1;
@@ -67,8 +72,13 @@ private:
 	// keyLengths[i] == groups[i].normalizedKey.size(), stored contiguously
 	// so the length pre-check scans one compact array instead of the groups.
 	std::vector<unsigned int> keyLengths;
-	// DP rows for the serial path; each addBatch worker brings its own.
+	// DP rows for the serial path.
 	std::vector<unsigned int> scratch;
+	// addBatch's threads, started on first use and kept, with one DP buffer
+	// per thread.
+	std::unique_ptr<WorkerPool> pool;
+	std::vector<std::vector<unsigned int>> poolRows;
+	bool keepMembers() const { return opts.showAllMatches || opts.showScores; }
 
 	std::string normalize(const std::string& s) const;
 	Candidate prepare(const std::string& line) const;
@@ -170,16 +180,28 @@ inline void Matcher::place(const std::string& line, Candidate& c, Hit hit) {
 	if(memoEnabled())
 		groupOf.emplace(c.normalized, hit.group == NO_GROUP ? Hit(groups.size(), 0) : hit);
 	if(hit.group != NO_GROUP) {
-		groups[hit.group].matches.push_back(line);
-		groups[hit.group].scores.push_back(hit.score);
+		MatchGroup& g = groups[hit.group];
+		if(opts.representative == RepLongest && line.size() > g.longest.size()) {
+			g.longest = line;
+			g.longestAt = g.count;
+		}
+		g.count++;
+		if(keepMembers()) {
+			g.matches.push_back(line);
+			g.scores.push_back(hit.score);
+		}
 		return;
 	}
 	MatchGroup group;
 	group.key = line;
 	group.normalizedKey = c.normalized;
 	group.profile = std::move(c.profile);
-	group.matches.push_back(line);
-	group.scores.push_back(0);
+	group.count = 1;
+	if(opts.representative == RepLongest) group.longest = line;
+	if(keepMembers()) {
+		group.matches.push_back(line);
+		group.scores.push_back(0);
+	}
 	groups.push_back(std::move(group));
 	keyLengths.push_back(c.normalized.size());
 }
@@ -204,20 +226,20 @@ inline void Matcher::addBatch(const std::vector<std::string>& lines, unsigned th
 	std::vector<Candidate> candidates(lines.size());
 	std::vector<Hit> hit(lines.size());
 
+	const unsigned workers = std::max(1u, threads);
+	if(!pool || pool->size() != workers) {
+		pool.reset(new WorkerPool(workers));
+		poolRows.assign(workers, std::vector<unsigned int>());
+	}
 	std::atomic<size_t> next(0);
-	auto worker = [&]() {
-		std::vector<unsigned int> rows; // this thread's DP buffer
+	pool->run([&](unsigned w) {
+		std::vector<unsigned int>& rows = poolRows[w]; // this thread's DP buffer
 		for(size_t i; (i = next++) < lines.size(); ) {
 			candidates[i] = prepare(lines[i]);
 			Hit memo = lookupMemo(candidates[i].normalized);
 			hit[i] = (memo.group != NO_GROUP) ? memo : findMatch(candidates[i], 0, frozen, rows);
 		}
-	};
-	unsigned workers = (unsigned)std::max<size_t>(1, std::min<size_t>(threads, lines.size()));
-	std::vector<std::thread> pool;
-	for(unsigned t = 1; t < workers; t++) pool.emplace_back(worker);
-	worker();
-	for(auto& t : pool) t.join();
+	});
 
 	for(size_t i = 0; i < lines.size(); i++) {
 		Hit h = lookupMemo(candidates[i].normalized); // an earlier line in this batch may have memoised it
@@ -244,42 +266,36 @@ inline std::string Matcher::formatScore(double score) const {
 inline void Matcher::show(std::ostream* output) const {
 	// Each group is printed as its representative (first line seen, or the
 	// longest member with --rep longest; ties go to the earlier line).
-	struct Row { const MatchGroup* group; size_t rep; };
+	const bool longest = opts.representative == RepLongest;
+	struct Row { const MatchGroup* group; const std::string* rep; size_t repAt; };
 	std::vector<Row> rows;
 	rows.reserve(groups.size());
-	for(const auto& group : groups) {
-		size_t rep = 0;
-		if(opts.representative == RepLongest)
-			for(size_t j = 1; j < group.matches.size(); j++)
-				if(group.matches[j].size() > group.matches[rep].size()) rep = j;
-		rows.push_back(Row{&group, rep});
-	}
+	for(const auto& group : groups)
+		rows.push_back(longest ? Row{&group, &group.longest, group.longestAt} : Row{&group, &group.key, 0});
 	// Sort alphabetically by representative, like GNU uniq on sorted input.
 	// Sort rows, not the groups, so groupOf's indices stay valid.
-	std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) {
-		return a.group->matches[a.rep] < b.group->matches[b.rep];
-	});
+	std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return *a.rep < *b.rep; });
 
 	// Colour adds SGR codes around fields and changes nothing else, so the
 	// output with codes stripped is byte-identical to the plain output.
 	const bool on = opts.color;
-	const bool all = opts.showAllMatches || opts.showScores;
+	const bool all = keepMembers();
 	for(const Row& row : rows) {
 		const MatchGroup& group = *row.group;
 		if(opts.showTotals) {
 			// Pad first, then colour, so codes don't disturb the alignment.
 			// Frequency buckets make the hot lines of a log jump out.
-			const size_t n = group.matches.size();
+			const size_t n = group.count;
 			std::ostringstream count;
 			count << std::setw(countWidth) << n;
 			const color::Style& style = n >= 100 ? color::BoldRed : n >= 10 ? color::Yellow
 			                          : n >= 2 ? color::Green : color::Gray;
 			*output << color::paint(on, style, count.str()) << " "; // uniq -c also separates count and line with one space
 		}
-		*output << group.matches[row.rep];
+		*output << *row.rep;
 		if(all) {
 			for(size_t j = 0; j < group.matches.size(); j++) {
-				if(j == row.rep) continue;
+				if(j == row.repAt) continue;
 				*output << "\t" << color::paint(on, color::Dim, group.matches[j]);
 				if(opts.showScores) {
 					// Green: well inside the threshold; yellow: near its edge.
