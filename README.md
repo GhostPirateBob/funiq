@@ -70,6 +70,8 @@ Log lines that differ only in timestamps, PIDs, ports or IP addresses are usuall
 
 On 20,000 synthetic nginx lines `-D` turns 13,024 groups into 109, and 5.5s into 0.2s.
 
+On Windows, give funiq the file (`funiq -d -D -c error.log` or `< error.log`) or pipe from a native program: a pipe from Git Bash/MSYS tools (`cat`, `zcat`) into a native program runs at about 8 MB/s.
+
 ### Comparison methods
 
 | `-m` | distance | default `-d` | good for |

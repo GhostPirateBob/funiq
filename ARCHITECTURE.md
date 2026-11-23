@@ -9,6 +9,7 @@ funiq groups near-duplicate lines. It reads every line, assigns each to a group,
 | `src/funiq.cpp` | CLI: argument rewriting and parsing, colour decisions, input batching, progress bar, exit codes |
 | `lib/funiq/Settings.h` | every option that shapes matching and output, with plain-run defaults |
 | `lib/funiq/Matcher.h` | normalisation, grouping (serial and threaded), output |
+| `lib/funiq/WorkerPool.h` | the threads `addBatch` runs on, started once |
 | `lib/funiq/similarity.h` | distance functions: bounded Levenshtein, trigram profiles, cosine distance |
 | `lib/funiq/Color.h` | colour decision (`color::want`) and SGR styling (`color::paint`) |
 | `lib/tclap/`, `lib/catch/` | vendored TCLAP (argument parsing) and Catch2 v2 (tests) |
@@ -18,7 +19,7 @@ funiq groups near-duplicate lines. It reads every line, assigns each to a group,
 
 ```
 argv ─► rewrite (--opt=value, bare -d) ─► TCLAP ─► Settings
-input ─► 256-line batches ─► Matcher::addBatch ─► groups ─► Matcher::show ─► stdout
+input ─► 1 MiB reads ─► 256-line batches ─► Matcher::addBatch ─► groups ─► Matcher::show ─► stdout
                                │
             per line: normalize ─► memo? ─► scan groups (length check ─► distance)
 ```
@@ -61,11 +62,15 @@ Input is read in batches of 256 lines. Each batch runs in two phases:
 1. **Parallel, read-only:** every line is normalised and compared against the groups that existed before the batch (the "frozen" groups), on up to `-j` threads.
 2. **Serial, in input order:** a line then checks only the groups created earlier in the same batch. All of those have higher indices than any frozen group, so a first-match hit from phase 1 is already the overall answer. Under `--best`, a new group wins only if it is strictly closer, which preserves the serial tie-break.
 
+The threads are started once (`WorkerPool`) and woken for each batch. Starting them per batch used to cost more than the batch itself on log input, where most lines are memo hits: all cores ran twice as long as one.
+
 The output is therefore byte-identical for any thread count, and the unit tests check that in every mode. Batches of 256 keep the serial phase short when most lines start new groups, while giving the threads enough work per round.
 
 ### 6. Output (`Matcher::show`)
 
-Each group is printed as its representative: the key, or its longest member with `--rep longest`. Groups are sorted alphabetically by representative. Rows are sorted through pointers, so group indices (which the memo relies on) never move. `-c` prints the size right-aligned in 7 columns, like `uniq -c`. `-a` and `--scores` append the other members, tab-separated.
+Each group is printed as its representative: the key, or its longest member with `--rep longest`. Groups are sorted alphabetically by representative. Rows are sorted through pointers, so group indices (which the memo relies on) never move. `-c` prints the size right-aligned in 7 columns, like `uniq -c`. Member lines are stored only when they are printed (`-a`, `--scores`); otherwise a group keeps its size and, for `--rep longest`, its longest line, so memory follows the number of groups and distinct lines, not the input size.
+
+Input is read in 1 MiB chunks and split with `memchr`, and output goes through a 1 MiB buffer: iostreams use `BUFSIZ`, 512 bytes on MinGW, which meant a system call per 512 bytes. `-a` and `--scores` append the other members, tab-separated.
 
 ### 7. Colour (`Color.h`, `funiq.cpp`)
 
@@ -91,5 +96,10 @@ Measured on synthetic nginx lines, with identical output at every step:
 | band-only DP initialisation, inline length check | 1.2–1.3× |
 | threads (12 cores) | a further 3.9–9× on 20k lines |
 | `-D` on logs | 13,024 → 109 groups, 5.5s → 0.2s (repeats hit the memo) |
+| threads started once, not per batch (240k log lines, `-d -D`, 12 threads) | 1.65s → 0.36s |
+| members kept only for `-a`/`--scores` (27 MB log, `-d -D -c`) | 46.5 MB → 5.5 MB peak |
+| 1 MiB input/output buffers | 11–19% |
+
+Pipes on Windows: an MSYS/Cygwin program (Git Bash's `cat`, `zcat`) writing into a native one runs at about 8 MB/s, whatever the reader does (`rg` is just as slow). From a native writer, or a file, funiq reads at full speed.
 
 Tried and rejected: a length-bucket index. Gathering and sorting candidates cost about as much as the length checks it skipped (0.8–1.2×). Also avoided: `thread_local` scratch buffers. In static MinGW builds their destructors ran after the emulated-TLS block was freed, corrupting the heap at thread exit. Ideas not yet tried are in TODO.md.
