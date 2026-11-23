@@ -53,11 +53,15 @@ cmp -s "$TMP/ref.out" "$TMP/cand.out" && ok "stdin < synthetic.log -d -c" || ko 
 cat "$SYNTH" | "$CAND" -d -c > "$TMP/cand.out"
 cmp -s "$TMP/ref.out" "$TMP/cand.out" && ok "pipe synthetic.log -d -c" || ko "pipe synthetic.log -d -c"
 
+"$CAND" "" -d -c < "$SYNTH" > "$TMP/cand.out"
+cmp -s "$TMP/ref.out" "$TMP/cand.out" && ok "empty filename reads stdin" || ko "empty filename reads stdin"
+same "-j -0 is -j 0" "$SYNTH" -d -c -j -0
+
 # --- errors ------------------------------------------------------------------
 name="missing file: non-zero exit, message names the file"
 err=$("$CAND" "$TMP/does-not-exist.txt" 2>&1 >/dev/null); rc=$?
 if [ $rc -ne 0 ] && printf '%s' "$err" | grep -q 'does-not-exist.txt'; then ok "$name"; else ko "$name" "rc=$rc stderr='$err'"; fi
-for bad in "-d inf" "-d nan" "--rep sideways" "-x"; do
+for bad in "-d inf" "-d nan" "--rep sideways" "-x" "-j 99999999999"; do
 	# shellcheck disable=SC2086
 	"$REF" $bad "$SYNTH" >/dev/null 2>&1; rr=$?
 	# shellcheck disable=SC2086

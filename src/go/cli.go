@@ -206,11 +206,12 @@ func parseArgs(args []string) (Settings, string, command, error) {
 				}
 				method = &m
 			case "threads":
-				n, err := strconv.Atoi(value)
+				// an int like the C++ (so 2^31 and up are errors)
+				n, err := strconv.ParseInt(value, 10, 32)
 				if err != nil || n < 0 {
 					return fail("Value '%s' does not meet constraint: 0 or more (-j)", value)
 				}
-				threads = n
+				threads = int(n)
 			case "rep":
 				switch value {
 				case "first":

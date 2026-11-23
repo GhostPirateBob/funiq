@@ -127,3 +127,14 @@ func TestBareDBeforeANonNumberLikeStrtod(t *testing.T) {
 		t.Fatalf("file %q", f)
 	}
 }
+
+func TestThreadsAreA32BitIntLikeCpp(t *testing.T) {
+	for _, bad := range [][]string{{"-j", "99999999999"}, {"-j", "2147483648"}} {
+		if _, _, _, err := parseArgs(bad); err == nil {
+			t.Errorf("%q should be an error", bad)
+		}
+	}
+	if mustRun(t, "-j", "-0").Threads != mustRun(t, "-j", "0").Threads {
+		t.Error("-j -0 should mean 0")
+	}
+}

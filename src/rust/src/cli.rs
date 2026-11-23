@@ -69,6 +69,8 @@ pub fn parse_args(args: Vec<OsString>) -> Result<Command, String> {
             }
         }
     }
+    // an empty filename means stdin, as in the C++
+    let file = file.filter(|p| !p.as_os_str().is_empty());
     Ok(Command::Run { settings: flags.into_settings(), file })
 }
 
@@ -177,9 +179,13 @@ impl Flags {
                 })
             }
             "threads" => {
+                // an int like the C++ (so -0 is 0, and 2^31 and up are errors)
                 self.threads = value
-                    .parse::<usize>()
-                    .map_err(|_| format!("Value '{value}' does not meet constraint: 0 or more (-j)"))?
+                    .parse::<i32>()
+                    .ok()
+                    .filter(|&n| n >= 0)
+                    .ok_or_else(|| format!("Value '{value}' does not meet constraint: 0 or more (-j)"))?
+                    as usize
             }
             "rep" => {
                 self.rep = Some(match value {
@@ -328,6 +334,18 @@ mod tests {
     fn help_and_version() {
         assert!(matches!(parse(&["-h"]), Ok(Command::Help)));
         assert!(matches!(parse(&["--version"]), Ok(Command::Version)));
+    }
+
+    #[test]
+    fn threads_are_a_32_bit_int_like_cpp() {
+        assert!(parse(&["-j", "99999999999"]).is_err()); // C++ int overflow: rejected
+        assert!(parse(&["-j", "2147483648"]).is_err());
+        assert_eq!(run(&["-j", "-0"]).threads, run(&["-j", "0"]).threads); // -0 is 0
+    }
+
+    #[test]
+    fn an_empty_filename_means_stdin_like_cpp() {
+        assert_eq!(file(&[""]), None);
     }
 
     #[test]
