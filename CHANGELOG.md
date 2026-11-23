@@ -5,6 +5,9 @@ Release notes for funiq, newest first. Versions follow [Semantic Versioning](htt
 ## [Unreleased]
 
 ### Fixed
+- Windows: a `0x1A` (Ctrl-Z) byte no longer ends the input. Text mode treated it as end of
+  file, so everything after it was silently dropped, from files and stdin alike. Input is now
+  read in binary mode; CRLF input behaves as before.
 - An unknown option (`-x`, `--nope`) is an argument error instead of being opened as a file
   (`funiq: -x: No such file or directory`). After `--`, a leading dash is still a filename.
 - `-j` with a negative count is an error; it used to wrap to 4294967295 and start up to 256
